@@ -1,0 +1,42 @@
+name: Daily Financial Report to Telegram
+
+on:
+  schedule:
+    # Ejecuta 1 vez al día a las 22:00 UTC (17:00 hora de Guayaquil, tras cierre de mercado)
+    - cron: "0 22 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      tickers:
+        description: "Tickers separados por coma (ej. AAPL,MSFT)"
+        required: false
+        default: "AAPL"
+      focus:
+        description: "Enfoque: growth o solidity"
+        required: false
+        default: "growth"
+
+jobs:
+  generate-and-send:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests fpdf2
+
+      - name: Run report script
+        env:
+          ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TICKERS: ${{ github.event.inputs.tickers || 'AAPL' }}
+          FOCUS: ${{ github.event.inputs.focus || 'growth' }}
+        run: python reporte.py
