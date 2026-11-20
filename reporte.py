@@ -1,14 +1,16 @@
 import os
 import sys
 import time
+import unicodedata
 from datetime import datetime, timezone
+
 import requests
 from fpdf import FPDF
 
 ALPHAVANTAGE_API_KEY = os.environ.get("ALPHAVANTAGE_API_KEY", "").strip()
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-TICKERS_RAW = os.environ.get("TICKERS", "AAPL")
+TICKERS_RAW = os.environ.get("TICKERS", "AAPL").strip()
 FOCUS = os.environ.get("FOCUS", "growth").strip().lower()
 
 
@@ -25,7 +27,14 @@ def validar_entorno():
         sys.exit(1)
 
 
-def av_get(params: dict) -> dict:
+def limpiar_texto_pdf(texto):
+    if not texto:
+        return ""
+    normalizado = unicodedata.normalize("NFKD", str(texto))
+    return normalizado.encode("latin-1", "ignore").decode("latin-1")
+
+
+def obtener_json(params):
     url = "https://www.alphavantage.co/query"
     query = dict(params)
     query["apikey"] = ALPHAVANTAGE_API_KEY
@@ -33,219 +42,236 @@ def av_get(params: dict) -> dict:
     resp.raise_for_status()
     data = resp.json()
     if "Note" in data or "Information" in data:
-        raise RuntimeError(f"Límite o aviso de Alpha Vantage: {data.get('Note') or data.get('Information')}")
+        print(f"Aviso API Alpha Vantage: {data.get('Note') or data.get('Information')}")
     return data
 
 
-def to_float(val):
+def a_float(valor):
+    if valor in (None, "", "None", "N/A", "-"):
+        return None
     try:
-        if val in (None, "", "None", "N/A", "-"):
-            return None
-        return float(val)
-    except (ValueError, TypeError):
+        return float(str(valor).replace(",", "").strip())
+    except ValueError:
         return None
 
 
-def fmt_num(val, suffix=""):
+def fmt_num(val, dec=2, prefijo="", sufijo=""):
     if val is None:
         return "N/D"
-    if abs(val) >= 1e9:
-        return f"{val / 1e9:.2f}B{suffix}"
-    if abs(val) >= 1e6:
-        return f"{val / 1e6:.2f}M{suffix}"
-    return f"{val:.2f}{suffix}"
+    return f"{prefijo}{val:,.{dec}f}{sufijo}"
 
 
-def obtener_analisis_ticker(ticker: str, focus: str) -> dict:
-    overview = av_get({"function": "OVERVIEW", "symbol": ticker})
+def analizar_ticker(ticker):
+    ticker = ticker.strip().upper()
+    overview = obtener_json({"function": "OVERVIEW", "symbol": ticker})
     time.sleep(1.2)
-    cashflow = av_get({"function": "CASH_FLOW", "symbol": ticker})
+    income = obtener_json({"function": "INCOME_STATEMENT", "symbol": ticker})
+    time.sleep(1.2)
+    balance = obtener_json({"function": "BALANCE_SHEET", "symbol": ticker})
 
     nombre = overview.get("Name") or ticker
     sector = overview.get("Sector") or "N/D"
-    pe = to_float(overview.get("PERatio"))
-    profit_margin = to_float(overview.get("ProfitMargin"))
-    op_margin = to_float(overview.get("OperatingMarginTTM"))
-    rev_growth = to_float(overview.get("QuarterlyRevenueGrowthYOY"))
-    earn_growth = to_float(overview.get("QuarterlyEarningsGrowthYOY"))
-    ev_ebitda = to_float(overview.get("EVToEBITDA"))
-    debt_equity = None  # No siempre viene directo en OVERVIEW; se reporta N/D si falta
+    pe = a_float(overview.get("PERatio"))
+    peg = a_float(overview.get("PEGRatio"))
+    roe = a_float(overview.get("ReturnOnEquityTTM"))
+    margen_op = a_float(overview.get("OperatingMarginTTM"))
+    deuda_patrimonio = a_float(overview.get("DebtToEquityRatio"))
 
-    # Flujo de caja operativo y libre del último reporte anual disponible
-    ocf = None
-    fcf = None
-    reports = cashflow.get("annualReports") or []
-    if reports:
-        latest = reports[0]
-        ocf = to_float(latest.get("operatingCashflow"))
-        capex = to_float(latest.get("capitalExpenditures"))
-        if ocf is not None and capex is not None:
-            fcf = ocf - abs(capex)
+    annual_inc = income.get("annualReports") or []
+    crecimiento_ing = None
+    if len(annual_inc) >= 2:
+        rev_0 = a_float(annual_inc[0].get("totalRevenue"))
+        rev_1 = a_float(annual_inc[1].get("totalRevenue"))
+        if rev_0 is not None and rev_1 not in (None, 0):
+            crecimiento_ing = ((rev_0 - rev_1) / abs(rev_1)) * 100.0
+
+    liquidez_corriente = None
+    annual_bal = balance.get("annualReports") or []
+    if annual_bal:
+        act_corr = a_float(annual_bal[0].get("totalCurrentAssets"))
+        pas_corr = a_float(annual_bal[0].get("totalCurrentLiabilities"))
+        if act_corr is not None and pas_corr not in (None, 0):
+            liquidez_corriente = act_corr / pas_corr
 
     riesgos = []
-    if focus == "growth":
-        if rev_growth is not None and rev_growth < 0.05:
-            riesgos.append(f"Crecimiento interanual de ingresos bajo ({rev_growth * 100:.1f}%).")
-        elif rev_growth is None:
-            riesgos.append("Crecimiento trimestral de ingresos no disponible en OVERVIEW.")
-        if op_margin is not None and op_margin < 0.10:
-            riesgos.append(f"Margen operativo ajustado ({op_margin * 100:.1f}%).")
-        if fcf is not None and fcf < 0:
-            riesgos.append(f"Flujo de caja libre negativo ({fmt_num(fcf)}).")
-        if pe is not None and pe > 35:
-            riesgos.append(f"Múltiplo P/E exigente ({pe:.1f}x) frente a riesgos de ejecución.")
-    else:
-        if fcf is not None and fcf < 0:
-            riesgos.append(f"Consumo de caja libre en último reporte anual ({fmt_num(fcf)}).")
-        if ocf is None:
-            riesgos.append("Flujo de caja operativo no disponible en CASH_FLOW.")
-        if profit_margin is not None and profit_margin < 0.08:
-            riesgos.append(f"Margen neto estrecho ({profit_margin * 100:.1f}%) ante presiones de costos.")
-        if ev_ebitda is not None and ev_ebitda > 18:
-            riesgos.append(f"Valoración EV/EBITDA elevada ({ev_ebitda:.1f}x).")
-
+    if deuda_patrimonio is not None and deuda_patrimonio > 2.0:
+        riesgos.append(f"Apalancamiento elevado (D/E {deuda_patrimonio:.2f})")
+    if liquidez_corriente is not None and liquidez_corriente < 1.0:
+        riesgos.append(f"Liquidez corriente ajustada ({liquidez_corriente:.2f}x)")
+    if pe is not None and pe > 35:
+        riesgos.append(f"Valoracion exigente (P/E {pe:.1f}x)")
+    if crecimiento_ing is not None and crecimiento_ing < 0:
+        riesgos.append(f"Contracción anual de ingresos ({crecimiento_ing:.1f}%)")
     if not riesgos:
-        riesgos.append("Sin alertas críticas automáticas en los campos revisados; verificar deuda y vencimientos.")
+        riesgos.append("Sin alertas criticas evidentes en metricas base")
+
+    if FOCUS == "solidity":
+        resumen_enfoque = (
+            f"Solidez: D/E {fmt_num(deuda_patrimonio)}, Liquidez {fmt_num(liquidez_corriente)}x, "
+            f"Margen op. {fmt_num(margen_op, 1, '', '%')}."
+        )
+    else:
+        resumen_enfoque = (
+            f"Crecimiento: Ingresos YoY {fmt_num(crecimiento_ing, 1, '', '%')}, "
+            f"ROE {fmt_num(roe, 1, '', '%')}, P/E {fmt_num(pe, 1, '', 'x')}, PEG {fmt_num(peg)}."
+        )
 
     return {
         "ticker": ticker,
         "nombre": nombre,
         "sector": sector,
-        "rev_growth": f"{rev_growth * 100:.1f}%" if rev_growth is not None else "N/D",
-        "earn_growth": f"{earn_growth * 100:.1f}%" if earn_growth is not None else "N/D",
-        "op_margin": f"{op_margin * 100:.1f}%" if op_margin is not None else "N/D",
-        "profit_margin": f"{profit_margin * 100:.1f}%" if profit_margin is not None else "N/D",
-        "ocf": fmt_num(ocf),
-        "fcf": fmt_num(fcf),
-        "pe": f"{pe:.1f}x" if pe is not None else "N/D",
-        "ev_ebitda": f"{ev_ebitda:.1f}x" if ev_ebitda is not None else "N/D",
+        "pe": pe,
+        "peg": peg,
+        "roe": roe,
+        "margen_op": margen_op,
+        "deuda_patrimonio": deuda_patrimonio,
+        "liquidez_corriente": liquidez_corriente,
+        "crecimiento_ing": crecimiento_ing,
         "riesgos": riesgos,
+        "resumen_enfoque": resumen_enfoque,
     }
 
 
-def limpiar_texto_pdf(texto: str) -> str:
-    return texto.encode("latin-1", "replace").decode("latin-1")
-
-
-def construir_resumen_texto(resultados: list, focus: str, fecha_str: str) -> str:
-    enfoque_label = "Crecimiento (Growth)" if focus == "growth" else "Solidez y Deuda"
+def construir_mensaje_telegram(resultados, enfoque, fecha_str):
+    enfoque_label = "Solidez Financiera" if enfoque == "solidity" else "Crecimiento"
     lineas = [
-        f"INFORME FUNDAMENTAL ({enfoque_label}) - {fecha_str}",
-        "Prioridad: Fundamentos y riesgos reales (sin depender de sentimiento de noticias).",
-        ""
+        f"📊 *Informe Fundamental ({enfoque_label})*",
+        f"🕒 {fecha_str}",
+        "",
     ]
     for r in resultados:
-        lineas.append(f"*{r['ticker']}* - {r['nombre']} ({r['sector']})")
-        lineas.append(
-            f"Crec. Ingresos YoY: {r['rev_growth']} | Marg. Op: {r['op_margin']} | "
-            f"OCF: {r['ocf']} | FCF: {r['fcf']} | P/E: {r['pe']}"
-        )
-        for rs in r["riesgos"]:
-            lineas.append(f"- Riesgo: {rs}")
+        lineas.append(f"*{r['ticker']}* — {r['nombre']} ({r['sector']})")
+        lineas.append(f"• {r['resumen_enfoque']}")
+        lineas.append(f"• Riesgos: {'; '.join(r['riesgos'])}")
         lineas.append("")
-    lineas.append("Se adjunta el informe en PDF.")
-    return "\n".join(lineas)
+    return "\n".join(lineas).strip()
 
 
-def generar_pdf(resultados: list, focus: str, fecha_str: str, ruta_pdf: str):
-    enfoque_label = "Crecimiento (Growth)" if focus == "growth" else "Solidez y Deuda"
+def generar_pdf(resultados, enfoque, fecha_str, ruta_pdf):
+    enfoque_label = "Solidez Financiera" if enfoque == "solidity" else "Crecimiento"
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    pdf.set_font("Helvetica", "B", 15)
-    pdf.cell(0, 10, limpiar_texto_pdf(f"Informe Fundamental - {enfoque_label}"), ln=True)
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_x(pdf.l_margin)
+    pdf.cell(
+        pdf.epw,
+        10,
+        limpiar_texto_pdf(f"Informe fundamental - {enfoque_label}"),
+        new_x="LMARGIN",
+        new_y="NEXT",
+    )
 
     pdf.set_font("Helvetica", "", 10)
-    pdf.cell(0, 6, limpiar_texto_pdf(f"Fecha (UTC): {fecha_str}"), ln=True)
-    pdf.cell(0, 6, limpiar_texto_pdf("Criterio: Fundamentos y riesgos reales por encima de sentimiento."), ln=True)
+    pdf.set_x(pdf.l_margin)
+    pdf.cell(
+        pdf.epw,
+        6,
+        limpiar_texto_pdf(f"Fecha (UTC): {fecha_str}"),
+        new_x="LMARGIN",
+        new_y="NEXT",
+    )
+    pdf.set_x(pdf.l_margin)
+    pdf.cell(
+        pdf.epw,
+        6,
+        limpiar_texto_pdf("Criterio: Fundamentos y riesgos reales por encima de sentimiento."),
+        new_x="LMARGIN",
+        new_y="NEXT",
+    )
     pdf.ln(4)
 
     for r in resultados:
-        pdf.set_font("Helvetica", "B", 12)
-        pdf.cell(0, 8, limpiar_texto_pdf(f"{r['ticker']} - {r['nombre']} ({r['sector']})"), ln=True)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_x(pdf.l_margin)
+        pdf.cell(
+            pdf.epw,
+            8,
+            limpiar_texto_pdf(f"{r['ticker']} - {r['nombre']} ({r['sector']})"),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
 
         pdf.set_font("Helvetica", "", 10)
-        metrics_line = (
-            f"Crec. Ingresos YoY: {r['rev_growth']} | Crec. Utilidad YoY: {r['earn_growth']} | "
-            f"Margen Op: {r['op_margin']} | Margen Neto: {r['profit_margin']}"
+        metricas_line = (
+            f"P/E: {fmt_num(r['pe'], 1, '', 'x')} | PEG: {fmt_num(r['peg'])} | "
+            f"ROE: {fmt_num(r['roe'], 1, '', '%')} | Margen Op.: {fmt_num(r['margen_op'], 1, '', '%')} | "
+            f"D/E: {fmt_num(r['deuda_patrimonio'])} | Liq. Corr.: {fmt_num(r['liquidez_corriente'])}x | "
+            f"Ingresos YoY: {fmt_num(r['crecimiento_ing'], 1, '', '%')}"
         )
-        val_line = (
-            f"Flujo Caja Op (OCF): {r['ocf']} | Flujo Caja Libre (FCF): {r['fcf']} | "
-            f"P/E: {r['pe']} | EV/EBITDA: {r['ev_ebitda']}"
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(
+            pdf.epw,
+            6,
+            limpiar_texto_pdf(metricas_line),
+            new_x="LMARGIN",
+            new_y="NEXT",
         )
-        pdf.multi_cell(0, 6, limpiar_texto_pdf(metrics_line))
-        pdf.multi_cell(0, 6, limpiar_texto_pdf(val_line))
 
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.cell(0, 6, limpiar_texto_pdf("Riesgos identificados:"), ln=True)
-        pdf.set_font("Helvetica", "", 10)
-        for rs in r["riesgos"]:
-            pdf.multi_cell(0, 6, limpiar_texto_pdf(f"  * {rs}"))
-        pdf.ln(4)
+        val_line = f"Lectura ({enfoque_label}): {r['resumen_enfoque']}"
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(
+            pdf.epw,
+            6,
+            limpiar_texto_pdf(val_line),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+
+        riesgos_line = f"Riesgos clave: {'; '.join(r['riesgos'])}"
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(
+            pdf.epw,
+            6,
+            limpiar_texto_pdf(riesgos_line),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+        pdf.ln(3)
 
     pdf.output(ruta_pdf)
 
 
-def enviar_telegram_texto(texto: str):
+def enviar_telegram_mensaje(texto):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
-        "text": texto[:4000],
+        "text": texto,
+        "parse_mode": "Markdown",
     }
-    resp = requests.post(url, json=payload, timeout=20)
+    resp = requests.post(url, json=payload, timeout=30)
+    if not resp.ok:
+        payload.pop("parse_mode", None)
+        resp = requests.post(url, json=payload, timeout=30)
     resp.raise_for_status()
 
 
-def enviar_telegram_pdf(ruta_pdf: str, caption: str):
+def enviar_telegram_documento(ruta_pdf, caption=""):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
     with open(ruta_pdf, "rb") as f:
-        resp = requests.post(
-            url,
-            data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption[:1000]},
-            files={"document": (os.path.basename(ruta_pdf), f, "application/pdf")},
-            timeout=30,
-        )
+        files = {"document": (os.path.basename(ruta_pdf), f, "application/pdf")}
+        data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption}
+        resp = requests.post(url, data=data, files=files, timeout=60)
     resp.raise_for_status()
 
 
 def main():
     validar_entorno()
+    enfoque = "solidity" if FOCUS == "solidity" else "growth"
     tickers = [t.strip().upper() for t in TICKERS_RAW.split(",") if t.strip()]
     if not tickers:
         tickers = ["AAPL"]
 
-    focus = FOCUS if FOCUS in ("growth", "solidity") else "growth"
     fecha_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    resultados = [analizar_ticker(t) for t in tickers]
+
+    mensaje = construir_mensaje_telegram(resultados, enfoque, fecha_str)
     ruta_pdf = "informe.pdf"
+    generar_pdf(resultados, enfoque, fecha_str, ruta_pdf)
 
-    resultados = []
-    for idx, ticker in enumerate(tickers):
-        if idx > 0:
-            time.sleep(1.5)
-        try:
-            resultados.append(obtener_analisis_ticker(ticker, focus))
-        except Exception as exc:
-            resultados.append({
-                "ticker": ticker,
-                "nombre": ticker,
-                "sector": "N/D",
-                "rev_growth": "N/D",
-                "earn_growth": "N/D",
-                "op_margin": "N/D",
-                "profit_margin": "N/D",
-                "ocf": "N/D",
-                "fcf": "N/D",
-                "pe": "N/D",
-                "ev_ebitda": "N/D",
-                "riesgos": [f"Error al consultar datos: {exc}"],
-            })
-
-    resumen = construir_resumen_texto(resultados, focus, fecha_str)
-    generar_pdf(resultados, focus, fecha_str, ruta_pdf)
-
-    enviar_telegram_texto(resumen)
-    enviar_telegram_pdf(ruta_pdf, f"PDF adjunto - {', '.join(tickers)} ({fecha_str})")
+    enviar_telegram_mensaje(mensaje)
+    enviar_telegram_documento(ruta_pdf, caption=f"Reporte PDF ({enfoque}) - {fecha_str}")
     print("Reporte enviado correctamente a Telegram.")
 
 
