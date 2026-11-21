@@ -791,7 +791,7 @@ def main():
     top10 = analyzed[:10]
 
     # Mensaje limpio en Telegram: encabezado, fecha, indices y Top 10
-   lines = []
+    lines = []
     lines.append("FIMOTHY | FINANCIAL ENTERPRISE")
     lines.append("RADAR TECNOLOGICO — TOP 10 (CRECIMIENTO + IMPULSO)")
     lines.append(f"Fecha: {now_utc}")
