@@ -228,102 +228,196 @@ def sanitize_pdf_text(text):
     return text.encode("latin-1", errors="replace").decode("latin-1")
 
 
-class FinancialPDF(FPDF):
+class FimotiPDF(FPDF):
     def header(self):
-        self.set_font("Helvetica", "B", 13)
-        self.set_x(self.l_margin)
+        # Banner superior elegante de marca
+        banner_h = 22
+        self.set_fill_color(20, 33, 61)       # Azul marino profundo
+        self.rect(0, 0, self.w, banner_h, style="F")
+
+        self.set_fill_color(196, 154, 69)     # Detalle dorado sobrio
+        self.rect(0, banner_h, self.w, 1.5, style="F")
+
+        self.set_xy(self.l_margin, 4.5)
+        self.set_text_color(255, 255, 255)
+        self.set_font("Helvetica", "B", 16)
         self.cell(
-            0,
-            8,
-            sanitize_pdf_text("Reporte Tecnologico - Top 10 y Analisis Fundamental"),
+            self.epw,
+            7,
+            sanitize_pdf_text("FIMOTI"),
             new_x="LMARGIN",
             new_y="NEXT",
             align="L",
         )
-        self.set_draw_color(180, 180, 180)
-        self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
-        self.ln(3)
+
+        self.set_x(self.l_margin)
+        self.set_text_color(218, 224, 235)
+        self.set_font("Helvetica", "B", 8.5)
+        self.cell(
+            self.epw,
+            5,
+            sanitize_pdf_text("FINANCIAL ENTERPRISE"),
+            new_x="LMARGIN",
+            new_y="NEXT",
+            align="L",
+        )
+
+        self.set_text_color(30, 35, 42)
+        self.set_y(banner_h + 7)
 
     def footer(self):
-        self.set_y(-12)
+        self.set_y(-13)
+        self.set_draw_color(210, 214, 220)
+        self.line(self.l_margin, self.get_y() - 1.5, self.w - self.r_margin, self.get_y() - 1.5)
+        self.set_text_color(110, 118, 130)
         self.set_font("Helvetica", "I", 8)
         self.set_x(self.l_margin)
-        self.cell(0, 8, sanitize_pdf_text(f"Pagina {self.page_no()}/{{nb}}"), align="C")
+        self.cell(
+            self.epw,
+            8,
+            sanitize_pdf_text(f"FIMOTI - Financial Enterprise   |   Pagina {self.page_no()}/{{nb}}"),
+            align="C",
+        )
 
 
-def pdf_line(pdf, text, h=5, bold=False, size=8.5):
+def pdf_paragraph(pdf, text, h=5.2, bold=False, size=9, color=(35, 40, 48), space_after=1.5):
+    pdf.set_text_color(*color)
     pdf.set_font("Helvetica", "B" if bold else "", size)
     pdf.set_x(pdf.l_margin)
     pdf.multi_cell(pdf.epw, h, sanitize_pdf_text(text))
+    if space_after > 0:
+        pdf.ln(space_after)
+
+
+def pdf_section_title(pdf, title):
+    pdf.ln(3)
+    pdf.set_x(pdf.l_margin)
+    pdf.set_fill_color(241, 244, 249)
+    pdf.set_draw_color(20, 33, 61)
+    y_top = pdf.get_y()
+    pdf.rect(pdf.l_margin, y_top, pdf.epw, 7.5, style="F")
+    pdf.rect(pdf.l_margin, y_top, 2.5, 7.5, style="F")
+    pdf.set_xy(pdf.l_margin + 5, y_top + 1.2)
+    pdf.set_text_color(20, 33, 61)
+    pdf.set_font("Helvetica", "B", 10.5)
+    pdf.cell(pdf.epw - 5, 5.2, sanitize_pdf_text(title), new_x="LMARGIN", new_y="NEXT", align="L")
+    pdf.set_text_color(35, 40, 48)
+    pdf.ln(3)
 
 
 def build_pdf(filepath, now_str, indices_data, top10):
-    pdf = FinancialPDF()
+    pdf = FimotiPDF()
     pdf.alias_nb_pages()
-    pdf.set_auto_page_break(auto=True, margin=14)
+    pdf.set_margins(left=16, top=28, right=16)
+    pdf.set_auto_page_break(auto=True, margin=17)
     pdf.add_page()
 
-    pdf_line(pdf, f"Fecha de generacion (UTC): {now_str}", h=5, bold=False, size=9)
-    pdf.ln(2)
+    pdf_paragraph(
+        pdf,
+        "Informe Tecnologico - Seleccion Top 10, Comparativas y Lectura Fundamental",
+        h=6,
+        bold=True,
+        size=12,
+        color=(20, 33, 61),
+        space_after=1,
+    )
+    pdf_paragraph(
+        pdf,
+        f"Fecha de emision: {now_str}",
+        h=4.8,
+        bold=False,
+        size=8.5,
+        color=(100, 108, 120),
+        space_after=3,
+    )
 
-    pdf_line(pdf, "1. Indices de Referencia (NASDAQ y S&P 500)", h=6, bold=True, size=11)
+    # 1. Indices de referencia
+    pdf_section_title(pdf, "1. Indices de Referencia (NASDAQ y S&P 500)")
     for idx in indices_data:
-        line = f"- {idx['name']} ({idx['symbol']}): {fmt_num(idx['value'], prefix='')} | 1D: {fmt_pct(idx['chg_1d'])}"
-        pdf_line(pdf, line, h=5, bold=False, size=9)
-    pdf.ln(3)
+        line = f"* {idx['name']} ({idx['symbol']}): {fmt_num(idx['value'], prefix='')}  |  Variacion 1D: {fmt_pct(idx['chg_1d'])}"
+        pdf_paragraph(pdf, line, h=5.2, bold=False, size=9, space_after=1.5)
 
-    pdf_line(pdf, "2. Top 10 Empresas Tecnologicas (Crecimiento + Impulso)", h=6, bold=True, size=11)
+    # 2. Top 10 empresas tecnologicas
+    pdf_section_title(pdf, "2. Top 10 Empresas Tecnologicas (Crecimiento + Impulso)")
     for i, item in enumerate(top10, 1):
-        pdf_line(
+        pdf_paragraph(
             pdf,
-            f"{i}. {item['name']} ({item['symbol']}) - Precio: {fmt_num(item['price'])} | Score: {item['combined_score']:.2f}",
+            f"{i}. {item['name']} ({item['symbol']})  -  Precio: {fmt_num(item['price'])}  |  Puntaje: {item['combined_score']:.2f}",
+            h=5.4,
+            bold=True,
+            size=9.5,
+            color=(20, 33, 61),
+            space_after=1,
+        )
+        pdf_paragraph(
+            pdf,
+            f"Diferencias de variacion: 1D {fmt_pct(item['d_1d'])}  |  2D {fmt_pct(item['d_2d'])}  |  3D {fmt_pct(item['d_3d'])}  |  "
+            f"1Sem {fmt_pct(item['d_1w'])}  |  15D {fmt_pct(item['d_15d'])}  |  1Mes {fmt_pct(item['d_1m'])}  |  3Meses {fmt_pct(item['d_3m'])}",
+            h=4.8,
+            bold=False,
+            size=8.5,
+            space_after=1,
+        )
+        pdf_paragraph(
+            pdf,
+            f"Crecimiento del negocio: Ganancias {fmt_pct(item['earn_growth_pct'])}  |  Ingresos {fmt_pct(item['rev_growth_pct'])}",
+            h=4.8,
+            bold=False,
+            size=8.5,
+            space_after=1,
+        )
+        pdf_paragraph(
+            pdf,
+            f"Lectura clara: {item['plain_read'].capitalize()}.",
+            h=5,
+            bold=False,
+            size=8.8,
+            color=(50, 56, 65),
+            space_after=3.5,
+        )
+
+    # 3. Proyeccion y escenarios
+    pdf_section_title(pdf, "3. Proyeccion y Escenarios")
+    for item in top10:
+        pdf_paragraph(
+            pdf,
+            f"{item['symbol']} - {item['projection_label']}:",
             h=5,
             bold=True,
             size=9,
+            color=(20, 33, 61),
+            space_after=0.5,
         )
-        pdf_line(
+        pdf_paragraph(
             pdf,
-            f"   Diferencias: 1D {fmt_pct(item['d_1d'])} | 2D {fmt_pct(item['d_2d'])} | 3D {fmt_pct(item['d_3d'])} | "
-            f"1Sem {fmt_pct(item['d_1w'])} | 15D {fmt_pct(item['d_15d'])} | 1Mes {fmt_pct(item['d_1m'])} | 3Meses {fmt_pct(item['d_3m'])}",
-            h=4.5,
+            item["projection_detail"],
+            h=4.9,
             bold=False,
-            size=8.5,
+            size=8.6,
+            space_after=2.5,
         )
-        pdf_line(
-            pdf,
-            f"   Crecimiento negocio: Ganancias {fmt_pct(item['earn_growth_pct'])} | Ingresos {fmt_pct(item['rev_growth_pct'])}",
-            h=4.5,
-            bold=False,
-            size=8.5,
-        )
-        pdf_line(pdf, f"   Lectura: {item['plain_read']}", h=4.5, bold=False, size=8.5)
-        pdf.ln(1.5)
 
-    pdf.ln(2)
-    pdf_line(pdf, "3. Proyeccion y Escenarios", h=6, bold=True, size=11)
+    # 4. Bloque fundamental al final
+    pdf_section_title(pdf, "4. Bloque Fundamental (Al Cierre del Reporte)")
     for item in top10:
-        pdf_line(
+        pdf_paragraph(
             pdf,
-            f"- {item['symbol']} ({item['projection_label']}): {item['projection_detail']}",
-            h=4.5,
-            bold=False,
-            size=8.5,
+            f"{item['name']} ({item['symbol']}):",
+            h=5,
+            bold=True,
+            size=9,
+            color=(20, 33, 61),
+            space_after=0.5,
         )
-    pdf.ln(3)
-
-    pdf_line(pdf, "4. Bloque Fundamental Detallado (Al Cierre del Reporte)", h=6, bold=True, size=11)
-    for item in top10:
-        pdf_line(
+        pdf_paragraph(
             pdf,
-            f"- {item['symbol']} | Cap. Mercado: {fmt_big(item['market_cap'])} | "
-            f"P/E: {fmt_num(item['pe_ratio'], prefix='', decimals=1)} | "
-            f"P/E Futuro: {fmt_num(item['fwd_pe'], prefix='', decimals=1)} | "
-            f"Margen Neto: {fmt_pct(item['profit_margin_pct'])} | "
-            f"Deuda/Patrimonio: {fmt_num(item['debt_to_equity'], prefix='', decimals=1)} | "
-            f"Caja Libre: {fmt_big(item['free_cash_flow'])}",
-            h=4.5,
+            f"Capitalizacion: {fmt_big(item['market_cap'])}  |  P/E: {fmt_num(item['pe_ratio'], prefix='', decimals=1)}  |  "
+            f"P/E Futuro: {fmt_num(item['fwd_pe'], prefix='', decimals=1)}  |  Margen Neto: {fmt_pct(item['profit_margin_pct'])}  |  "
+            f"Deuda/Patrimonio: {fmt_num(item['debt_to_equity'], prefix='', decimals=1)}  |  Flujo de Caja Libre: {fmt_big(item['free_cash_flow'])}",
+            h=4.9,
             bold=False,
-            size=8.5,
+            size=8.6,
+            space_after=2.5,
         )
 
     pdf.output(filepath)
@@ -366,13 +460,14 @@ def main():
     top10 = analyzed[:10]
 
     lines = []
-    lines.append(f"RADAR TECNOLOGICO - TOP 10 ({now_utc})")
+    lines.append(f"FIMOTI | FINANCIAL ENTERPRISE — RADAR TECNOLOGICO ({now_utc})")
     lines.append("")
     lines.append("INDICES DE REFERENCIA:")
     for idx in indices_data:
         lines.append(f"• {idx['name']}: {fmt_num(idx['value'], prefix='')} ({fmt_pct(idx['chg_1d'])})")
     lines.append("")
     lines.append("TOP 10 EMPRESAS (CRECIMIENTO + IMPULSO):")
+    lines.append("")
 
     for i, item in enumerate(top10, 1):
         lines.append(
@@ -382,30 +477,36 @@ def main():
             f"   Ganancias: {fmt_pct(item['earn_growth_pct'])} | Ingresos: {fmt_pct(item['rev_growth_pct'])}\n"
             f"   Lectura: {item['plain_read'].capitalize()}."
         )
+        lines.append("")
 
-    lines.append("")
     lines.append("PROYECCION Y ESCENARIOS:")
+    lines.append("")
     for item in top10[:5]:
         lines.append(f"• {item['symbol']} ({item['projection_label']}): {item['projection_detail']}")
+        lines.append("")
 
-    lines.append("")
     lines.append("BLOQUE FUNDAMENTAL (RESUMEN FINAL):")
+    lines.append("")
     for item in top10:
         lines.append(
             f"• {item['symbol']}: Cap {fmt_big(item['market_cap'])} | P/E {fmt_num(item['pe_ratio'], prefix='', decimals=1)} | "
             f"Margen {fmt_pct(item['profit_margin_pct'])} | Deuda/Pat {fmt_num(item['debt_to_equity'], prefix='', decimals=1)} | "
             f"FCF {fmt_big(item['free_cash_flow'])}"
         )
+        lines.append("")
 
-    full_text = "\n".join(lines)
+    full_text = "\n".join(lines).strip()
 
     chunk_size = 3800
     for start in range(0, len(full_text), chunk_size):
         send_telegram_message(full_text[start:start + chunk_size])
 
-    pdf_path = "/tmp/reporte_tecnologico_top10.pdf"
+    pdf_path = "/tmp/Fimoti_Reporte_Tecnologico.pdf"
     build_pdf(pdf_path, now_utc, indices_data, top10)
-    send_telegram_document(pdf_path, caption="PDF detallado: Top 10 Tecnologicas, comparativas hasta 3 meses y bloque fundamental.")
+    send_telegram_document(
+        pdf_path,
+        caption="FIMOTI - Financial Enterprise | Reporte Tecnologico Top 10, comparativas y bloque fundamental."
+    )
 
 
 if __name__ == "__main__":
