@@ -128,14 +128,12 @@ def analyze_stock(symbol):
         free_cash_flow = safe_float(info.get("freeCashflow"))
         market_cap = safe_float(info.get("marketCap"))
 
-        # Combinacion de crecimiento financiero (ganancias/ingresos) + impulso/subida reciente
         growth_components = [x for x in [earn_growth_pct, rev_growth_pct] if x is not None]
         fin_growth_score = (sum(growth_components) / len(growth_components)) if growth_components else 0.0
 
         price_components = [x for x in [d_3m, d_1m, d_1w, d_1d] if x is not None]
         price_score = (sum(price_components) / len(price_components)) if price_components else 0.0
 
-        # Puntaje combinado equilibrado: 55% crecimiento negocio, 45% traccion de precio
         combined_score = (0.55 * fin_growth_score) + (0.45 * price_score)
 
         horizons = [d_1d, d_2d, d_3d, d_1w, d_15d, d_1m, d_3m]
@@ -233,15 +231,30 @@ def sanitize_pdf_text(text):
 class FinancialPDF(FPDF):
     def header(self):
         self.set_font("Helvetica", "B", 13)
-        self.cell(0, 8, sanitize_pdf_text("Reporte Tecnologico - Top 10 y Analisis Fundamental"), ln=1, align="L")
+        self.set_x(self.l_margin)
+        self.cell(
+            0,
+            8,
+            sanitize_pdf_text("Reporte Tecnologico - Top 10 y Analisis Fundamental"),
+            new_x="LMARGIN",
+            new_y="NEXT",
+            align="L",
+        )
         self.set_draw_color(180, 180, 180)
-        self.line(10, self.get_y(), 200, self.get_y())
+        self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
         self.ln(3)
 
     def footer(self):
         self.set_y(-12)
         self.set_font("Helvetica", "I", 8)
+        self.set_x(self.l_margin)
         self.cell(0, 8, sanitize_pdf_text(f"Pagina {self.page_no()}/{{nb}}"), align="C")
+
+
+def pdf_line(pdf, text, h=5, bold=False, size=8.5):
+    pdf.set_font("Helvetica", "B" if bold else "", size)
+    pdf.set_x(pdf.l_margin)
+    pdf.multi_cell(pdf.epw, h, sanitize_pdf_text(text))
 
 
 def build_pdf(filepath, now_str, indices_data, top10):
@@ -250,76 +263,67 @@ def build_pdf(filepath, now_str, indices_data, top10):
     pdf.set_auto_page_break(auto=True, margin=14)
     pdf.add_page()
 
-    pdf.set_font("Helvetica", "", 9)
-    pdf.multi_cell(0, 5, sanitize_pdf_text(f"Fecha de generacion (UTC): {now_str}"))
+    pdf_line(pdf, f"Fecha de generacion (UTC): {now_str}", h=5, bold=False, size=9)
     pdf.ln(2)
 
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.multi_cell(0, 6, sanitize_pdf_text("1. Indices de Referencia (NASDAQ y S&P 500)"))
-    pdf.set_font("Helvetica", "", 9)
+    pdf_line(pdf, "1. Indices de Referencia (NASDAQ y S&P 500)", h=6, bold=True, size=11)
     for idx in indices_data:
         line = f"- {idx['name']} ({idx['symbol']}): {fmt_num(idx['value'], prefix='')} | 1D: {fmt_pct(idx['chg_1d'])}"
-        pdf.multi_cell(0, 5, sanitize_pdf_text(line))
+        pdf_line(pdf, line, h=5, bold=False, size=9)
     pdf.ln(3)
 
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.multi_cell(0, 6, sanitize_pdf_text("2. Top 10 Empresas Tecnologicas (Crecimiento + Impulso)"))
-    pdf.set_font("Helvetica", "", 8.5)
+    pdf_line(pdf, "2. Top 10 Empresas Tecnologicas (Crecimiento + Impulso)", h=6, bold=True, size=11)
     for i, item in enumerate(top10, 1):
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.multi_cell(
-            0,
-            5,
-            sanitize_pdf_text(
-                f"{i}. {item['name']} ({item['symbol']}) - Precio: {fmt_num(item['price'])} | Score: {item['combined_score']:.2f}"
-            ),
+        pdf_line(
+            pdf,
+            f"{i}. {item['name']} ({item['symbol']}) - Precio: {fmt_num(item['price'])} | Score: {item['combined_score']:.2f}",
+            h=5,
+            bold=True,
+            size=9,
         )
-        pdf.set_font("Helvetica", "", 8.5)
-        pdf.multi_cell(
-            0,
-            4.5,
-            sanitize_pdf_text(
-                f"   Diferencias: 1D {fmt_pct(item['d_1d'])} | 2D {fmt_pct(item['d_2d'])} | 3D {fmt_pct(item['d_3d'])} | "
-                f"1Sem {fmt_pct(item['d_1w'])} | 15D {fmt_pct(item['d_15d'])} | 1Mes {fmt_pct(item['d_1m'])} | 3Meses {fmt_pct(item['d_3m'])}"
-            ),
+        pdf_line(
+            pdf,
+            f"   Diferencias: 1D {fmt_pct(item['d_1d'])} | 2D {fmt_pct(item['d_2d'])} | 3D {fmt_pct(item['d_3d'])} | "
+            f"1Sem {fmt_pct(item['d_1w'])} | 15D {fmt_pct(item['d_15d'])} | 1Mes {fmt_pct(item['d_1m'])} | 3Meses {fmt_pct(item['d_3m'])}",
+            h=4.5,
+            bold=False,
+            size=8.5,
         )
-        pdf.multi_cell(
-            0,
-            4.5,
-            sanitize_pdf_text(
-                f"   Crecimiento negocio: Ganancias {fmt_pct(item['earn_growth_pct'])} | Ingresos {fmt_pct(item['rev_growth_pct'])}"
-            ),
+        pdf_line(
+            pdf,
+            f"   Crecimiento negocio: Ganancias {fmt_pct(item['earn_growth_pct'])} | Ingresos {fmt_pct(item['rev_growth_pct'])}",
+            h=4.5,
+            bold=False,
+            size=8.5,
         )
-        pdf.multi_cell(0, 4.5, sanitize_pdf_text(f"   Lectura: {item['plain_read']}"))
+        pdf_line(pdf, f"   Lectura: {item['plain_read']}", h=4.5, bold=False, size=8.5)
         pdf.ln(1.5)
 
     pdf.ln(2)
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.multi_cell(0, 6, sanitize_pdf_text("3. Proyeccion y Escenarios"))
-    pdf.set_font("Helvetica", "", 8.5)
+    pdf_line(pdf, "3. Proyeccion y Escenarios", h=6, bold=True, size=11)
     for item in top10:
-        pdf.multi_cell(
-            0,
-            4.5,
-            sanitize_pdf_text(f"- {item['symbol']} ({item['projection_label']}): {item['projection_detail']}"),
+        pdf_line(
+            pdf,
+            f"- {item['symbol']} ({item['projection_label']}): {item['projection_detail']}",
+            h=4.5,
+            bold=False,
+            size=8.5,
         )
     pdf.ln(3)
 
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.multi_cell(0, 6, sanitize_pdf_text("4. Bloque Fundamental Detallado (Al Cierre del Reporte)"))
-    pdf.set_font("Helvetica", "", 8.5)
+    pdf_line(pdf, "4. Bloque Fundamental Detallado (Al Cierre del Reporte)", h=6, bold=True, size=11)
     for item in top10:
-        pdf.multi_cell(
-            0,
-            4.5,
-            sanitize_pdf_text(
-                f"- {item['symbol']} | Cap. Mercado: {fmt_big(item['market_cap'])} | "
-                f"P/E: {fmt_num(item['pe_ratio'], prefix='', decimals=1)} | "
-                f"P/E Futuro: {fmt_num(item['fwd_pe'], prefix='', decimals=1)} | "
-                f"Margen Neto: {fmt_pct(item['profit_margin_pct'])} | "
-                f"Deuda/Patrimonio: {fmt_num(item['debt_to_equity'], prefix='', decimals=1)} | "
-                f"Caja Libre: {fmt_big(item['free_cash_flow'])}"
-            ),
+        pdf_line(
+            pdf,
+            f"- {item['symbol']} | Cap. Mercado: {fmt_big(item['market_cap'])} | "
+            f"P/E: {fmt_num(item['pe_ratio'], prefix='', decimals=1)} | "
+            f"P/E Futuro: {fmt_num(item['fwd_pe'], prefix='', decimals=1)} | "
+            f"Margen Neto: {fmt_pct(item['profit_margin_pct'])} | "
+            f"Deuda/Patrimonio: {fmt_num(item['debt_to_equity'], prefix='', decimals=1)} | "
+            f"Caja Libre: {fmt_big(item['free_cash_flow'])}",
+            h=4.5,
+            bold=False,
+            size=8.5,
         )
 
     pdf.output(filepath)
