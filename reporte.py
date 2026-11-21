@@ -791,7 +791,7 @@ def main():
     top10 = analyzed[:10]
 
     # Mensaje limpio en Telegram: encabezado, fecha, indices y Top 10
-    lines = []
+   lines = []
     lines.append("FIMOTHY | FINANCIAL ENTERPRISE")
     lines.append("RADAR TECNOLOGICO — TOP 10 (CRECIMIENTO + IMPULSO)")
     lines.append(f"Fecha: {now_utc}")
@@ -800,15 +800,7 @@ def main():
     for idx in indices_data:
         lines.append(f"• {idx['name']}: {fmt_num(idx['value'], prefix='')} ({fmt_pct(idx['chg_1d'])})")
     lines.append("")
-    lines.append("TOP 10 EMPRESAS:")
-    for i, item in enumerate(top10, 1):
-        lines.append(
-            f"{i}. {item['name']} ({item['symbol']}) — {fmt_num(item['price'])} | "
-            f"1D {fmt_pct(item['d_1d'])} | 1Sem {fmt_pct(item['d_1w'])} | 1Mes {fmt_pct(item['d_1m'])}"
-        )
-    lines.append("")
     lines.append("Comparativas completas (1D a 3M), graficos tecnicos, proyeccion y bloque fundamental final en el PDF adjunto.")
-
     send_telegram_message("\n".join(lines))
 
     pdf_path = "/tmp/Fimothy_Institutional_Tech_Report.pdf"
