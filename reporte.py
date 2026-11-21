@@ -1,417 +1,407 @@
 import os
-import sys
-import time
-import unicodedata
+import math
 from datetime import datetime, timezone
-
 import requests
+import yfinance as yf
 from fpdf import FPDF
 
-ALPHAVANTAGE_API_KEY = os.environ.get("ALPHAVANTAGE_API_KEY", "").strip()
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-TICKERS_RAW = os.environ.get("TICKERS", "AAPL").strip()
-FOCUS = os.environ.get("FOCUS", "growth").strip().lower()
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+
+INDICES = {
+    "NASDAQ Composite": "^IXIC",
+    "S&P 500": "^GSPC",
+}
+
+TECH_UNIVERSE = [
+    "NVDA", "IBM", "INTC", "MSFT", "AAPL", "GOOGL", "META", "AMZN",
+    "AVGO", "AMD", "ORCL", "CRM", "ADBE", "QCOM", "CSCO", "TXN",
+    "MU", "PLTR", "SNOW", "NOW"
+]
 
 
-def validar_entorno():
-    faltantes = []
-    if not ALPHAVANTAGE_API_KEY:
-        faltantes.append("ALPHAVANTAGE_API_KEY")
-    if not TELEGRAM_BOT_TOKEN:
-        faltantes.append("TELEGRAM_BOT_TOKEN")
-    if not TELEGRAM_CHAT_ID:
-        faltantes.append("TELEGRAM_CHAT_ID")
-    if faltantes:
-        print(f"Faltan secretos de entorno: {', '.join(faltantes)}", file=sys.stderr)
-        sys.exit(1)
-
-
-def limpiar_texto_pdf(texto):
-    if not texto:
-        return ""
-    normalizado = unicodedata.normalize("NFKD", str(texto))
-    return normalizado.encode("latin-1", "ignore").decode("latin-1")
-
-
-def obtener_json(params):
-    url = "https://www.alphavantage.co/query"
-    query = dict(params)
-    query["apikey"] = ALPHAVANTAGE_API_KEY
-    for intento in range(2):
-        resp = requests.get(url, params=query, timeout=35)
-        resp.raise_for_status()
-        data = resp.json()
-        aviso = data.get("Note") or data.get("Information")
-        if aviso:
-            print(f"Aviso API Alpha Vantage ({params.get('function')}): {aviso}")
-            if intento == 0:
-                time.sleep(12)
-                continue
-        return data
-    return {}
-
-
-def a_float(valor):
-    if valor in (None, "", "None", "N/A", "-", "null"):
-        return None
+def safe_float(val):
     try:
-        return float(str(valor).replace(",", "").strip())
-    except ValueError:
+        if val is None:
+            return None
+        f = float(val)
+        return None if (math.isnan(f) or math.isinf(f)) else f
+    except Exception:
         return None
 
 
-def fmt_monto(val):
-    if val is None:
-        return "no disponible"
-    abs_val = abs(val)
-    signo = "-" if val < 0 else ""
-    if abs_val >= 1_000_000_000_000:
-        return f"{signo}${abs_val / 1_000_000_000_000:.2f} billones"
-    if abs_val >= 1_000_000_000:
-        return f"{signo}${abs_val / 1_000_000_000:.2f} mil millones"
-    if abs_val >= 1_000_000:
-        return f"{signo}${abs_val / 1_000_000:.1f} millones"
-    return f"{signo}${abs_val:,.0f}"
+def pct_change(current, past):
+    c = safe_float(current)
+    p = safe_float(past)
+    if c is None or p is None or p == 0:
+        return None
+    return ((c - p) / abs(p)) * 100.0
 
 
-def fmt_pct(val, dec=1):
-    if val is None:
-        return "no disponible"
-    return f"{val:+.{dec}f}%" if val != 0 else f"0.{'0' * dec}%"
+def fmt_pct(val):
+    v = safe_float(val)
+    if v is None:
+        return "N/D"
+    sign = "+" if v > 0 else ""
+    return f"{sign}{v:.2f}%"
 
 
-def fmt_ratio(val, dec=2):
-    if val is None:
-        return "no disponible"
-    return f"{val:.{dec}f} veces"
+def fmt_num(val, prefix="$", decimals=2):
+    v = safe_float(val)
+    if v is None:
+        return "N/D"
+    return f"{prefix}{v:,.{decimals}f}"
 
 
-def analizar_ticker(ticker):
-    ticker = ticker.strip().upper()
-    overview = obtener_json({"function": "OVERVIEW", "symbol": ticker})
-    time.sleep(2.0)
-    income = obtener_json({"function": "INCOME_STATEMENT", "symbol": ticker})
-    time.sleep(2.0)
-    balance = obtener_json({"function": "BALANCE_SHEET", "symbol": ticker})
-    time.sleep(2.0)
-    cashflow = obtener_json({"function": "CASH_FLOW", "symbol": ticker})
+def fmt_big(val):
+    v = safe_float(val)
+    if v is None:
+        return "N/D"
+    abs_v = abs(v)
+    sign = "-" if v < 0 else ""
+    if abs_v >= 1e12:
+        return f"{sign}${abs_v / 1e12:.2f}T"
+    if abs_v >= 1e9:
+        return f"{sign}${abs_v / 1e9:.2f}B"
+    if abs_v >= 1e6:
+        return f"{sign}${abs_v / 1e6:.2f}M"
+    return f"{sign}${abs_v:,.0f}"
 
-    nombre_raw = (overview.get("Name") or "").strip()
-    nombre = nombre_raw if nombre_raw and nombre_raw.upper() != ticker else f"Empresa ({ticker})"
-    sector_raw = (overview.get("Sector") or "").strip()
-    sector = sector_raw if sector_raw and sector_raw.upper() != "N/A" else "Sector no especificado en ficha"
-    industria = (overview.get("Industry") or "").strip()
 
-    pe = a_float(overview.get("PERatio"))
-    peg = a_float(overview.get("PEGRatio"))
-    roe_pct = None
-    roe_raw = a_float(overview.get("ReturnOnEquityTTM"))
-    if roe_raw is not None:
-        roe_pct = roe_raw * 100.0 if abs(roe_raw) <= 1.5 else roe_raw
+def get_index_snapshot(name, symbol):
+    try:
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period="10d", interval="1d")
+        closes = hist["Close"].dropna()
+        if len(closes) >= 2:
+            last_val = float(closes.iloc[-1])
+            prev_val = float(closes.iloc[-2])
+            chg = pct_change(last_val, prev_val)
+            return {
+                "name": name,
+                "symbol": symbol,
+                "value": last_val,
+                "chg_1d": chg,
+            }
+    except Exception:
+        pass
+    return {"name": name, "symbol": symbol, "value": None, "chg_1d": None}
 
-    margen_op_pct = None
-    op_margin_raw = a_float(overview.get("OperatingMarginTTM"))
-    if op_margin_raw is not None:
-        margen_op_pct = op_margin_raw * 100.0 if abs(op_margin_raw) <= 1.5 else op_margin_raw
 
-    deuda_patrimonio = a_float(overview.get("DebtToEquityRatio"))
+def get_period_return(closes, trading_days_back):
+    if closes is None or len(closes) <= trading_days_back:
+        return None
+    latest = float(closes.iloc[-1])
+    past = float(closes.iloc[-(trading_days_back + 1)])
+    return pct_change(latest, past)
 
-    annual_inc = income.get("annualReports") or []
-    ingresos_actual = None
-    ingresos_anterior = None
-    utilidad_neta_actual = None
-    utilidad_operativa_actual = None
-    crecimiento_ing_pct = None
 
-    if annual_inc:
-        rep0 = annual_inc[0]
-        ingresos_actual = a_float(rep0.get("totalRevenue"))
-        utilidad_neta_actual = a_float(rep0.get("netIncome"))
-        utilidad_operativa_actual = a_float(rep0.get("operatingIncome"))
-        if margen_op_pct is None and ingresos_actual not in (None, 0) and utilidad_operativa_actual is not None:
-            margen_op_pct = (utilidad_operativa_actual / ingresos_actual) * 100.0
+def analyze_stock(symbol):
+    try:
+        t = yf.Ticker(symbol)
+        hist = t.history(period="6mo", interval="1d")
+        closes = hist["Close"].dropna() if (hist is not None and not hist.empty and "Close" in hist) else None
+        if closes is None or len(closes) < 2:
+            return None
 
-    if len(annual_inc) >= 2:
-        ingresos_anterior = a_float(annual_inc[1].get("totalRevenue"))
-        if ingresos_actual is not None and ingresos_anterior not in (None, 0):
-            crecimiento_ing_pct = ((ingresos_actual - ingresos_anterior) / abs(ingresos_anterior)) * 100.0
+        info = t.info or {}
+        price = float(closes.iloc[-1])
 
-    annual_bal = balance.get("annualReports") or []
-    act_corr = None
-    pas_corr = None
-    act_totales = None
-    pas_totales = None
-    patrimonio_total = None
-    efectivo = None
-    liquidez_corriente = None
+        d_1d = get_period_return(closes, 1)
+        d_2d = get_period_return(closes, 2)
+        d_3d = get_period_return(closes, 3)
+        d_1w = get_period_return(closes, 5)
+        d_15d = get_period_return(closes, 11)
+        d_1m = get_period_return(closes, 21)
+        d_3m = get_period_return(closes, 63)
 
-    if annual_bal:
-        bal0 = annual_bal[0]
-        act_corr = a_float(bal0.get("totalCurrentAssets"))
-        pas_corr = a_float(bal0.get("totalCurrentLiabilities"))
-        act_totales = a_float(bal0.get("totalAssets"))
-        pas_totales = a_float(bal0.get("totalLiabilities"))
-        patrimonio_total = a_float(bal0.get("totalShareholderEquity"))
-        efectivo = a_float(bal0.get("cashAndCashEquivalentsAtCarryingValue")) or a_float(
-            bal0.get("cashAndShortTermInvestments")
-        )
-        if act_corr is not None and pas_corr not in (None, 0):
-            liquidez_corriente = act_corr / pas_corr
-        if deuda_patrimonio is None and pas_totales is not None and patrimonio_total not in (None, 0):
-            deuda_patrimonio = pas_totales / patrimonio_total
-        if roe_pct is None and utilidad_neta_actual is not None and patrimonio_total not in (None, 0):
-            roe_pct = (utilidad_neta_actual / patrimonio_total) * 100.0
+        rev_growth = safe_float(info.get("revenueGrowth"))
+        earn_growth = safe_float(info.get("earningsGrowth"))
+        rev_growth_pct = rev_growth * 100.0 if rev_growth is not None else None
+        earn_growth_pct = earn_growth * 100.0 if earn_growth is not None else None
 
-    annual_cf = cashflow.get("annualReports") or []
-    flujo_caja_operativo = None
-    if annual_cf:
-        flujo_caja_operativo = a_float(annual_cf[0].get("operatingCashflow"))
+        pe_ratio = safe_float(info.get("trailingPE"))
+        fwd_pe = safe_float(info.get("forwardPE"))
+        debt_to_equity = safe_float(info.get("debtToEquity"))
+        profit_margins = safe_float(info.get("profitMargins"))
+        profit_margin_pct = profit_margins * 100.0 if profit_margins is not None else None
+        free_cash_flow = safe_float(info.get("freeCashflow"))
+        market_cap = safe_float(info.get("marketCap"))
 
-    riesgos = []
-    if deuda_patrimonio is not None and deuda_patrimonio > 2.0:
-        riesgos.append(
-            f"Carga de deuda elevada frente al capital propio ({fmt_ratio(deuda_patrimonio)}): "
-            "si suben los costos de financiamiento o baja la caja, presiona el margen."
-        )
-    if liquidez_corriente is not None and liquidez_corriente < 1.0:
-        riesgos.append(
-            f"Liquidez de corto plazo ajustada ({fmt_ratio(liquidez_corriente)}): "
-            "los compromisos a menos de un año superan los activos líquidos inmediatos."
-        )
-    elif liquidez_corriente is not None and liquidez_corriente < 1.25:
-        riesgos.append(
-            f"Colchón de liquidez moderado ({fmt_ratio(liquidez_corriente)}): "
-            "conviene vigilar el flujo de caja operativo para cubrir obligaciones corrientes."
-        )
-    if utilidad_neta_actual is not None and utilidad_neta_actual < 0:
-        riesgos.append(
-            f"Resultado neto negativo ({fmt_monto(utilidad_neta_actual)}): "
-            "la empresa está registrando pérdidas contables en el último ejercicio anual."
-        )
-    if flujo_caja_operativo is not None and flujo_caja_operativo < 0:
-        riesgos.append(
-            f"Flujo de caja operativo negativo ({fmt_monto(flujo_caja_operativo)}): "
-            "la operación diaria está consumiendo efectivo en lugar de generarlo."
-        )
-    if crecimiento_ing_pct is not None and crecimiento_ing_pct < 0:
-        riesgos.append(
-            f"Caída anual en las ventas ({fmt_pct(crecimiento_ing_pct)}): "
-            "se observa contracción de ingresos frente al año anterior."
-        )
-    if pe is not None and pe > 35:
-        riesgos.append(
-            f"Precio exigente respecto a las ganancias ({pe:.1f} veces utilidades): "
-            "el mercado ya descuenta expectativas altas y puede corregir si el ritmo se enfría."
-        )
-    if not riesgos:
-        riesgos.append(
-            "No se detectan señales críticas de alerta en los estados financieros consultados, "
-            "aunque siempre conviene revisar cambios en márgenes, competencia y regulación."
-        )
+        # Combinacion de crecimiento financiero (ganancias/ingresos) + impulso/subida reciente
+        growth_components = [x for x in [earn_growth_pct, rev_growth_pct] if x is not None]
+        fin_growth_score = (sum(growth_components) / len(growth_components)) if growth_components else 0.0
 
-    if FOCUS == "solidity":
-        explicacion_enfoque = (
-            f"Enfoque de solidez financiera: la empresa reporta ingresos anuales por {fmt_monto(ingresos_actual)}, "
-            f"utilidad neta de {fmt_monto(utilidad_neta_actual)} y efectivo disponible por {fmt_monto(efectivo)}. "
-            f"Su liquidez corriente (capacidad de pagar deudas de corto plazo con activos cercanos a efectivo) es de "
-            f"{fmt_ratio(liquidez_corriente)}, su relación de deuda frente a patrimonio es de {fmt_ratio(deuda_patrimonio)} "
-            f"y su margen operativo (cuánto deja la operación antes de impuestos e intereses) es de {fmt_pct(margen_op_pct)}."
-        )
-    else:
-        explicacion_enfoque = (
-            f"Enfoque de crecimiento y generación de valor: las ventas anuales alcanzan {fmt_monto(ingresos_actual)} "
-            f"con una variación interanual de {fmt_pct(crecimiento_ing_pct)}. La rentabilidad sobre el capital de los "
-            f"accionistas (ROE) se ubica en {fmt_pct(roe_pct)}, el margen operativo en {fmt_pct(margen_op_pct)} "
-            f"y el flujo de caja generado por la operación en {fmt_monto(flujo_caja_operativo)}."
-        )
+        price_components = [x for x in [d_3m, d_1m, d_1w, d_1d] if x is not None]
+        price_score = (sum(price_components) / len(price_components)) if price_components else 0.0
 
-    detalle_metricas = [
-        f"Ventas anuales (último año): {fmt_monto(ingresos_actual)} | Variación anual: {fmt_pct(crecimiento_ing_pct)}",
-        f"Utilidad neta: {fmt_monto(utilidad_neta_actual)} | Margen operativo: {fmt_pct(margen_op_pct)}",
-        f"Efectivo y equivalentes: {fmt_monto(efectivo)} | Flujo de caja operativo: {fmt_monto(flujo_caja_operativo)}",
-        f"Activos corrientes vs. Pasivos corrientes: {fmt_monto(act_corr)} vs. {fmt_monto(pas_corr)} (Liquidez: {fmt_ratio(liquidez_corriente)})",
-        f"Patrimonio total: {fmt_monto(patrimonio_total)} | Deuda/Patrimonio: {fmt_ratio(deuda_patrimonio)} | P/E: {fmt_ratio(pe)} | PEG: {fmt_ratio(peg)}",
-    ]
+        # Puntaje combinado equilibrado: 55% crecimiento negocio, 45% traccion de precio
+        combined_score = (0.55 * fin_growth_score) + (0.45 * price_score)
 
-    return {
-        "ticker": ticker,
-        "nombre": nombre,
-        "sector": sector,
-        "industria": industria,
-        "explicacion_enfoque": explicacion_enfoque,
-        "detalle_metricas": detalle_metricas,
-        "riesgos": riesgos,
+        horizons = [d_1d, d_2d, d_3d, d_1w, d_15d, d_1m, d_3m]
+        valid_horizons = [x for x in horizons if x is not None]
+        positive_count = len([x for x in valid_horizons if x > 0])
+        positive_ratio = positive_count / max(1, len(valid_horizons))
+
+        if positive_ratio >= 0.75 and (earn_growth_pct is None or earn_growth_pct >= 0):
+            projection_label = "Impulso alcista sostenido"
+            projection_detail = (
+                "Mantiene fuerza en la mayoria de los plazos desde 1D hasta 3 meses. El escenario base favorece "
+                "continuidad mientras respete soportes recientes y no pierda ritmo en el cierre."
+            )
+        elif positive_ratio >= 0.5:
+            projection_label = "Avance con pausas / selectivo"
+            projection_detail = (
+                "Combina tramos positivos con consolidaciones. Conviene vigilar si el crecimiento de ganancias "
+                "y el volumen respaldan nuevas subidas o si hay toma de ganancias."
+            )
+        else:
+            projection_label = "Fase de ajuste o cautela"
+            projection_detail = (
+                "Presenta presion o retrocesos en varios plazos revisados. Es preferible esperar confirmacion "
+                "de piso antes de asumir que la subida retomara velocidad."
+            )
+
+        fundamental_summary = []
+        if earn_growth_pct is not None:
+            if earn_growth_pct > 15:
+                fundamental_summary.append(f"ganancias creciendo con fuerza ({fmt_pct(earn_growth_pct)})")
+            elif earn_growth_pct > 0:
+                fundamental_summary.append(f"ganancias en expansion moderada ({fmt_pct(earn_growth_pct)})")
+            else:
+                fundamental_summary.append(f"ganancias bajo presion ({fmt_pct(earn_growth_pct)})")
+
+        if debt_to_equity is not None:
+            if debt_to_equity < 80:
+                fundamental_summary.append("endeudamiento contenido")
+            elif debt_to_equity < 180:
+                fundamental_summary.append("deuda moderada frente al patrimonio")
+            else:
+                fundamental_summary.append("apalancamiento elevado a vigilar")
+
+        if free_cash_flow is not None and free_cash_flow > 0:
+            fundamental_summary.append(f"genera caja libre positiva ({fmt_big(free_cash_flow)})")
+
+        plain_read = "; ".join(fundamental_summary) if fundamental_summary else "datos fundamentales parciales en fuente"
+
+        return {
+            "symbol": symbol,
+            "name": info.get("shortName") or info.get("longName") or symbol,
+            "price": price,
+            "d_1d": d_1d,
+            "d_2d": d_2d,
+            "d_3d": d_3d,
+            "d_1w": d_1w,
+            "d_15d": d_15d,
+            "d_1m": d_1m,
+            "d_3m": d_3m,
+            "rev_growth_pct": rev_growth_pct,
+            "earn_growth_pct": earn_growth_pct,
+            "pe_ratio": pe_ratio,
+            "fwd_pe": fwd_pe,
+            "debt_to_equity": debt_to_equity,
+            "profit_margin_pct": profit_margin_pct,
+            "free_cash_flow": free_cash_flow,
+            "market_cap": market_cap,
+            "combined_score": combined_score,
+            "projection_label": projection_label,
+            "projection_detail": projection_detail,
+            "plain_read": plain_read,
+        }
+    except Exception:
+        return None
+
+
+def sanitize_pdf_text(text):
+    replacements = {
+        "—": "-",
+        "–": "-",
+        "“": '"',
+        "”": '"',
+        "‘": "'",
+        "’": "'",
+        "•": "*",
+        "…": "...",
+        "≥": ">=",
+        "≤": "<=",
     }
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+    return text.encode("latin-1", errors="replace").decode("latin-1")
 
 
-def construir_mensaje_telegram(resultados, enfoque, fecha_str):
-    enfoque_titulo = "Solidez Financiera" if enfoque == "solidity" else "Crecimiento del Negocio"
-    partes = [
-        f"📊 *Informe Fundamental Amplio — {enfoque_titulo}*",
-        f"🕒 {fecha_str}",
-        "_Análisis basado en estados financieros y riesgos reales, sin depender de rumores o sentimiento._",
-        "",
-    ]
-    for r in resultados:
-        encabezado_sec = f"{r['sector']}" + (f" · {r['industria']}" if r["industria"] else "")
-        partes.append(f"*{r['ticker']} — {r['nombre']}*")
-        partes.append(f"_{encabezado_sec}_")
-        partes.append(r["explicacion_enfoque"])
-        partes.append("*Indicadores clave:*")
-        for linea in r["detalle_metricas"]:
-            partes.append(f"• {linea}")
-        partes.append("*Riesgos a vigilar:*")
-        for riesgo in r["riesgos"]:
-            partes.append(f"⚠️ {riesgo}")
-        partes.append("")
+class FinancialPDF(FPDF):
+    def header(self):
+        self.set_font("Helvetica", "B", 13)
+        self.cell(0, 8, sanitize_pdf_text("Reporte Tecnologico - Top 10 y Analisis Fundamental"), ln=1, align="L")
+        self.set_draw_color(180, 180, 180)
+        self.line(10, self.get_y(), 200, self.get_y())
+        self.ln(3)
 
-    texto = "\n".join(partes).strip()
-    if len(texto) > 3900:
-        texto = texto[:3880] + "\n\n_(El detalle completo va adjunto en el PDF)._"
-    return texto
+    def footer(self):
+        self.set_y(-12)
+        self.set_font("Helvetica", "I", 8)
+        self.cell(0, 8, sanitize_pdf_text(f"Pagina {self.page_no()}/{{nb}}"), align="C")
 
 
-def generar_pdf(resultados, enfoque, fecha_str, ruta_pdf):
-    enfoque_titulo = "Solidez Financiera" if enfoque == "solidity" else "Crecimiento del Negocio"
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
+def build_pdf(filepath, now_str, indices_data, top10):
+    pdf = FinancialPDF()
+    pdf.alias_nb_pages()
+    pdf.set_auto_page_break(auto=True, margin=14)
     pdf.add_page()
 
-    pdf.set_font("Helvetica", "B", 15)
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(
-        pdf.epw,
-        10,
-        limpiar_texto_pdf(f"Informe Fundamental - {enfoque_titulo}"),
-        new_x="LMARGIN",
-        new_y="NEXT",
-    )
+    pdf.set_font("Helvetica", "", 9)
+    pdf.multi_cell(0, 5, sanitize_pdf_text(f"Fecha de generacion (UTC): {now_str}"))
+    pdf.ln(2)
 
-    pdf.set_font("Helvetica", "", 10)
-    pdf.set_x(pdf.l_margin)
-    pdf.cell(
-        pdf.epw,
-        6,
-        limpiar_texto_pdf(f"Generado: {fecha_str}"),
-        new_x="LMARGIN",
-        new_y="NEXT",
-    )
-    pdf.set_x(pdf.l_margin)
-    pdf.multi_cell(
-        pdf.epw,
-        5.5,
-        limpiar_texto_pdf(
-            "Enfoque de análisis: Evaluación objetiva de ingresos, rentabilidad, liquidez, "
-            "endeudamiento y riesgos operativos por encima del sentimiento del mercado."
-        ),
-        new_x="LMARGIN",
-        new_y="NEXT",
-    )
-    pdf.ln(4)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.multi_cell(0, 6, sanitize_pdf_text("1. Indices de Referencia (NASDAQ y S&P 500)"))
+    pdf.set_font("Helvetica", "", 9)
+    for idx in indices_data:
+        line = f"- {idx['name']} ({idx['symbol']}): {fmt_num(idx['value'], prefix='')} | 1D: {fmt_pct(idx['chg_1d'])}"
+        pdf.multi_cell(0, 5, sanitize_pdf_text(line))
+    pdf.ln(3)
 
-    for r in resultados:
-        pdf.set_font("Helvetica", "B", 12)
-        pdf.set_x(pdf.l_margin)
-        titulo_emp = f"{r['ticker']} - {r['nombre']}"
-        pdf.cell(pdf.epw, 7, limpiar_texto_pdf(titulo_emp), new_x="LMARGIN", new_y="NEXT")
-
-        pdf.set_font("Helvetica", "I", 9.5)
-        pdf.set_x(pdf.l_margin)
-        sub_emp = r["sector"] + (f" | {r['industria']}" if r["industria"] else "")
-        pdf.cell(pdf.epw, 5.5, limpiar_texto_pdf(sub_emp), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.multi_cell(0, 6, sanitize_pdf_text("2. Top 10 Empresas Tecnologicas (Crecimiento + Impulso)"))
+    pdf.set_font("Helvetica", "", 8.5)
+    for i, item in enumerate(top10, 1):
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.multi_cell(
+            0,
+            5,
+            sanitize_pdf_text(
+                f"{i}. {item['name']} ({item['symbol']}) - Precio: {fmt_num(item['price'])} | Score: {item['combined_score']:.2f}"
+            ),
+        )
+        pdf.set_font("Helvetica", "", 8.5)
+        pdf.multi_cell(
+            0,
+            4.5,
+            sanitize_pdf_text(
+                f"   Diferencias: 1D {fmt_pct(item['d_1d'])} | 2D {fmt_pct(item['d_2d'])} | 3D {fmt_pct(item['d_3d'])} | "
+                f"1Sem {fmt_pct(item['d_1w'])} | 15D {fmt_pct(item['d_15d'])} | 1Mes {fmt_pct(item['d_1m'])} | 3Meses {fmt_pct(item['d_3m'])}"
+            ),
+        )
+        pdf.multi_cell(
+            0,
+            4.5,
+            sanitize_pdf_text(
+                f"   Crecimiento negocio: Ganancias {fmt_pct(item['earn_growth_pct'])} | Ingresos {fmt_pct(item['rev_growth_pct'])}"
+            ),
+        )
+        pdf.multi_cell(0, 4.5, sanitize_pdf_text(f"   Lectura: {item['plain_read']}"))
         pdf.ln(1.5)
 
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.set_x(pdf.l_margin)
-        pdf.cell(pdf.epw, 6, limpiar_texto_pdf("Lectura general:"), new_x="LMARGIN", new_y="NEXT")
-
-        pdf.set_font("Helvetica", "", 10)
-        pdf.set_x(pdf.l_margin)
+    pdf.ln(2)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.multi_cell(0, 6, sanitize_pdf_text("3. Proyeccion y Escenarios"))
+    pdf.set_font("Helvetica", "", 8.5)
+    for item in top10:
         pdf.multi_cell(
-            pdf.epw,
-            5.5,
-            limpiar_texto_pdf(r["explicacion_enfoque"]),
-            new_x="LMARGIN",
-            new_y="NEXT",
+            0,
+            4.5,
+            sanitize_pdf_text(f"- {item['symbol']} ({item['projection_label']}): {item['projection_detail']}"),
         )
-        pdf.ln(2)
+    pdf.ln(3)
 
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.set_x(pdf.l_margin)
-        pdf.cell(pdf.epw, 6, limpiar_texto_pdf("Detalle de cifras y ratios:"), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.multi_cell(0, 6, sanitize_pdf_text("4. Bloque Fundamental Detallado (Al Cierre del Reporte)"))
+    pdf.set_font("Helvetica", "", 8.5)
+    for item in top10:
+        pdf.multi_cell(
+            0,
+            4.5,
+            sanitize_pdf_text(
+                f"- {item['symbol']} | Cap. Mercado: {fmt_big(item['market_cap'])} | "
+                f"P/E: {fmt_num(item['pe_ratio'], prefix='', decimals=1)} | "
+                f"P/E Futuro: {fmt_num(item['fwd_pe'], prefix='', decimals=1)} | "
+                f"Margen Neto: {fmt_pct(item['profit_margin_pct'])} | "
+                f"Deuda/Patrimonio: {fmt_num(item['debt_to_equity'], prefix='', decimals=1)} | "
+                f"Caja Libre: {fmt_big(item['free_cash_flow'])}"
+            ),
+        )
 
-        pdf.set_font("Helvetica", "", 9.5)
-        for item in r["detalle_metricas"]:
-            pdf.set_x(pdf.l_margin)
-            pdf.multi_cell(
-                pdf.epw,
-                5.5,
-                limpiar_texto_pdf(f"- {item}"),
-                new_x="LMARGIN",
-                new_y="NEXT",
-            )
-        pdf.ln(2)
-
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.set_x(pdf.l_margin)
-        pdf.cell(pdf.epw, 6, limpiar_texto_pdf("Riesgos identificados:"), new_x="LMARGIN", new_y="NEXT")
-
-        pdf.set_font("Helvetica", "", 9.5)
-        for riesgo in r["riesgos"]:
-            pdf.set_x(pdf.l_margin)
-            pdf.multi_cell(
-                pdf.epw,
-                5.5,
-                limpiar_texto_pdf(f"- {riesgo}"),
-                new_x="LMARGIN",
-                new_y="NEXT",
-            )
-        pdf.ln(5)
-
-    pdf.output(ruta_pdf)
+    pdf.output(filepath)
 
 
-def enviar_telegram_mensaje(texto):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+def send_telegram_message(text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": texto,
-        "parse_mode": "Markdown",
+        "chat_id": CHAT_ID,
+        "text": text,
     }
     resp = requests.post(url, json=payload, timeout=30)
-    if not resp.ok:
-        payload.pop("parse_mode", None)
-        resp = requests.post(url, json=payload, timeout=30)
     resp.raise_for_status()
 
 
-def enviar_telegram_documento(ruta_pdf, caption=""):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
-    with open(ruta_pdf, "rb") as f:
-        files = {"document": (os.path.basename(ruta_pdf), f, "application/pdf")}
-        data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption}
+def send_telegram_document(filepath, caption=""):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+    with open(filepath, "rb") as f:
+        files = {"document": (os.path.basename(filepath), f, "application/pdf")}
+        data = {"chat_id": CHAT_ID, "caption": caption[:1020]}
         resp = requests.post(url, data=data, files=files, timeout=60)
-    resp.raise_for_status()
+        resp.raise_for_status()
 
 
 def main():
-    validar_entorno()
-    enfoque = "solidity" if FOCUS == "solidity" else "growth"
-    tickers = [t.strip().upper() for t in TICKERS_RAW.split(",") if t.strip()]
-    if not tickers:
-        tickers = ["AAPL"]
+    if not BOT_TOKEN or not CHAT_ID:
+        raise RuntimeError("Faltan TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID en variables de entorno.")
 
-    fecha_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    resultados = [analizar_ticker(t) for t in tickers]
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    mensaje = construir_mensaje_telegram(resultados, enfoque, fecha_str)
-    ruta_pdf = "informe.pdf"
-    generar_pdf(resultados, enfoque, fecha_str, ruta_pdf)
+    indices_data = [get_index_snapshot(name, sym) for name, sym in INDICES.items()]
 
-    enviar_telegram_mensaje(mensaje)
-    enviar_telegram_documento(ruta_pdf, caption=f"Informe PDF ({enfoque}) - {fecha_str}")
-    print("Reporte amplio enviado correctamente a Telegram.")
+    analyzed = []
+    for sym in TECH_UNIVERSE:
+        res = analyze_stock(sym)
+        if res is not None:
+            analyzed.append(res)
+
+    analyzed.sort(key=lambda x: x["combined_score"], reverse=True)
+    top10 = analyzed[:10]
+
+    lines = []
+    lines.append(f"RADAR TECNOLOGICO - TOP 10 ({now_utc})")
+    lines.append("")
+    lines.append("INDICES DE REFERENCIA:")
+    for idx in indices_data:
+        lines.append(f"• {idx['name']}: {fmt_num(idx['value'], prefix='')} ({fmt_pct(idx['chg_1d'])})")
+    lines.append("")
+    lines.append("TOP 10 EMPRESAS (CRECIMIENTO + IMPULSO):")
+
+    for i, item in enumerate(top10, 1):
+        lines.append(
+            f"{i}. {item['name']} ({item['symbol']}) — {fmt_num(item['price'])}\n"
+            f"   Dif: 1D {fmt_pct(item['d_1d'])} | 2D {fmt_pct(item['d_2d'])} | 3D {fmt_pct(item['d_3d'])} | "
+            f"1Sem {fmt_pct(item['d_1w'])} | 15D {fmt_pct(item['d_15d'])} | 1Mes {fmt_pct(item['d_1m'])} | 3Meses {fmt_pct(item['d_3m'])}\n"
+            f"   Ganancias: {fmt_pct(item['earn_growth_pct'])} | Ingresos: {fmt_pct(item['rev_growth_pct'])}\n"
+            f"   Lectura: {item['plain_read'].capitalize()}."
+        )
+
+    lines.append("")
+    lines.append("PROYECCION Y ESCENARIOS:")
+    for item in top10[:5]:
+        lines.append(f"• {item['symbol']} ({item['projection_label']}): {item['projection_detail']}")
+
+    lines.append("")
+    lines.append("BLOQUE FUNDAMENTAL (RESUMEN FINAL):")
+    for item in top10:
+        lines.append(
+            f"• {item['symbol']}: Cap {fmt_big(item['market_cap'])} | P/E {fmt_num(item['pe_ratio'], prefix='', decimals=1)} | "
+            f"Margen {fmt_pct(item['profit_margin_pct'])} | Deuda/Pat {fmt_num(item['debt_to_equity'], prefix='', decimals=1)} | "
+            f"FCF {fmt_big(item['free_cash_flow'])}"
+        )
+
+    full_text = "\n".join(lines)
+
+    chunk_size = 3800
+    for start in range(0, len(full_text), chunk_size):
+        send_telegram_message(full_text[start:start + chunk_size])
+
+    pdf_path = "/tmp/reporte_tecnologico_top10.pdf"
+    build_pdf(pdf_path, now_utc, indices_data, top10)
+    send_telegram_document(pdf_path, caption="PDF detallado: Top 10 Tecnologicas, comparativas hasta 3 meses y bloque fundamental.")
 
 
 if __name__ == "__main__":
