@@ -10,57 +10,55 @@ from fpdf import FPDF
 # ==============================================================================
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
-GROK_KEY = os.environ.get("GROK_API_KEY")
-META_KEY = os.environ.get("META_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 # ==============================================================================
-# 2. TEMAS FORMATIVOS, PSICOLÓGICOS Y DE ORIENTACIÓN (ROTACIÓN SEMANAL)
+# 2. EJES FINANCIEROS Y DE RIESGO (ROTACIÓN SEMANAL)
 # ==============================================================================
-TEMAS_FORMATIVOS = [
+TEMAS_FINANCIEROS = [
     {
-        "titulo": "El ruido de la noticia frente a la estructura del capital",
-        "eje_formativo": (
-            "Distinguir un cambio estructural real de una reacción emocional, "
-            "titular sensacionalista o escándalo pasajero."
+        "titulo": "Señal estructural frente a ruido de mercado",
+        "eje_financiero": (
+            "Separar cambios en fundamentos, flujos de caja, tasas o liquidez "
+            "de reacciones de corto plazo impulsadas por titulares."
         ),
-        "orientacion_psicologica": (
-            "Sesgo de recencia, urgencia por responder al instante y búsqueda "
-            "de certeza en escenarios ambiguos."
+        "enfoque_riesgo": (
+            "Evaluar asimetría de riesgo, tamaño de posición y horizonte "
+            "temporal antes de tomar decisiones."
         ),
     },
     {
-        "titulo": "Psicología de la manada: euforia, pánico y contagio social",
-        "eje_formativo": (
-            "Cómo influye el movimiento colectivo cuando una empresa sube o cae "
-            "con fuerza y qué suele pasar desapercibido."
+        "titulo": "Liquidez, apalancamiento y dinámica de consenso",
+        "eje_financiero": (
+            "Analizar cómo la liquidez y el posicionamiento colectivo amplifican "
+            "movimientos bruscos al alza o a la baja."
         ),
-        "orientacion_psicologica": (
-            "Contagio emocional, presión de pertenencia y diferencia entre "
-            "análisis propio e imitación reactiva."
-        ),
-    },
-    {
-        "titulo": "Ego, costo hundido y criterio frente al error",
-        "eje_formativo": (
-            "Cómo revisar una lectura o tesis cuando los hechos cambian, sin "
-            "confundir el valor de una decisión con el amor propio."
-        ),
-        "orientacion_psicologica": (
-            "Defensa narcisista, racionalización posterior al hecho y madurez "
-            "para ajustar el rumbo a tiempo."
+        "enfoque_riesgo": (
+            "Identificar puntos de vulnerabilidad ante cambios en expectativas "
+            "o condiciones de financiamiento."
         ),
     },
     {
-        "titulo": "Ética práctica, incentivos y naturaleza amoral del mercado",
-        "eje_formativo": (
-            "Leer los hechos financieros como un mecanismo regido por "
-            "incentivos, liquidez, expectativas y riesgo, no por juicios morales."
+        "titulo": "Revisión de tesis y control de sesgos en cartera",
+        "eje_financiero": (
+            "Contrastar la tesis inicial de una inversión o estrategia frente "
+            "a datos nuevos y resultados verificables."
         ),
-        "orientacion_psicologica": (
-            "Superar el pensamiento mágico o moralizador y cultivar sobriedad, "
-            "disciplina y autonomía de juicio."
+        "enfoque_riesgo": (
+            "Evitar aferrarse a pérdidas o decisiones pasadas cuando cambia el "
+            "escenario de riesgo/retorno."
+        ),
+    },
+    {
+        "titulo": "Incentivos económicos, márgenes y sostenibilidad",
+        "eje_financiero": (
+            "Leer los movimientos corporativos y sectoriales a través de "
+            "incentivos, costos, márgenes y asignación de capital."
+        ),
+        "enfoque_riesgo": (
+            "Distinguir crecimiento sostenible de expansión frágil o "
+            "dependiente de condiciones favorables."
         ),
     },
 ]
@@ -69,20 +67,20 @@ TEMAS_FORMATIVOS = [
 def obtener_edicion_y_tema() -> tuple[int, dict]:
     hoy = datetime.date.today()
     num_edicion = hoy.isocalendar()[1]
-    tema = TEMAS_FORMATIVOS[num_edicion % len(TEMAS_FORMATIVOS)]
+    tema = TEMAS_FINANCIEROS[num_edicion % len(TEMAS_FINANCIEROS)]
     return num_edicion, tema
 
 
 def obtener_hechos_semana() -> str:
     """
-    Reemplaza o amplía este bloque con las noticias, movimientos empresariales
-    o datos verificados de la semana que quieras someter al análisis.
+    Reemplaza o amplía este bloque con las noticias, cifras, movimientos de
+    precios, tasas o eventos verificados de la semana.
     """
     return (
-        "Hechos de la semana (prueba): Seguimiento de noticias corporativas, "
-        "movimientos destacados en empresas o sectores y cambios de ánimo del "
-        "mercado durante los últimos siete días. Trabaja únicamente con los "
-        "hechos indicados aquí sin inventar cifras ni eventos."
+        "Hechos de la semana (prueba): Seguimiento de noticias financieras y "
+        "corporativas, movimientos relevantes en sectores o activos y "
+        "condiciones de mercado de los últimos siete días. Trabaja únicamente "
+        "con los hechos indicados aquí sin inventar cifras ni eventos."
     )
 
 
@@ -107,140 +105,109 @@ def limpiar_texto_pdf(texto: str) -> str:
 
 
 # ==============================================================================
-# 3. CONECTORES DE INTELIGENCIA ARTIFICIAL
+# 3. MOTOR DE ANÁLISIS FINANCIERO (GEMINI)
 # ==============================================================================
 def consultar_gemini(prompt_sistema: str, prompt_usuario: str) -> str:
     if not GEMINI_KEY:
         return "Clave GEMINI_API_KEY no configurada."
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{GEMINI_MODEL}:generateContent?key={GEMINI_KEY}"
-    )
+
+    modelos_candidatos = []
+    for m in [GEMINI_MODEL, "gemini-2.5-flash", "gemini-2.0-flash"]:
+        if m and m not in modelos_candidatos:
+            modelos_candidatos.append(m)
+
     payload = {
         "systemInstruction": {"parts": [{"text": prompt_sistema}]},
         "contents": [{"role": "user", "parts": [{"text": prompt_usuario}]}],
-        "generationConfig": {"temperature": 0.4},
+        "generationConfig": {"temperature": 0.35},
     }
-    max_intentos = 4
-    for intento in range(1, max_intentos + 1):
-        try:
-            resp = requests.post(url, json=payload, timeout=60)
-            if resp.status_code in (429, 503) and intento < max_intentos:
-                time.sleep(3 * intento)
-                continue
-            if not resp.ok:
-                detalle = resp.text.strip().replace("\n", " ")[:300]
-                return (
-                    f"Gemini no disponible ({resp.status_code} con modelo "
-                    f"'{GEMINI_MODEL}'): {detalle}"
-                )
-            return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-        except Exception as exc:
-            if intento < max_intentos:
-                time.sleep(3 * intento)
-                continue
-            return f"Gemini no disponible en esta corrida ({exc})."
-    return f"Gemini no disponible en esta corrida con modelo '{GEMINI_MODEL}'."
 
-
-def consultar_openai_compatible(
-    url: str,
-    api_key: str | None,
-    modelo: str,
-    etiqueta: str,
-    prompt_sistema: str,
-    prompt_usuario: str,
-) -> str:
-    if not api_key:
-        return f"Clave para {etiqueta} no configurada."
-    try:
-        resp = requests.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": modelo,
-                "temperature": 0.4,
-                "messages": [
-                    {"role": "system", "content": prompt_sistema},
-                    {"role": "user", "content": prompt_usuario},
-                ],
-            },
-            timeout=60,
+    ultimo_error = ""
+    for modelo in modelos_candidatos:
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{modelo}:generateContent?key={GEMINI_KEY}"
         )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip()
-    except Exception as exc:
-        return f"{etiqueta} no disponible en esta corrida ({exc})."
+        max_intentos = 3
+        for intento in range(1, max_intentos + 1):
+            try:
+                resp = requests.post(url, json=payload, timeout=60)
+                if resp.status_code in (429, 503):
+                    detalle = resp.text.strip().replace("\n", " ")[:220]
+                    ultimo_error = f"({resp.status_code} con '{modelo}'): {detalle}"
+                    if intento < max_intentos:
+                        time.sleep(2 * intento)
+                        continue
+                    break
+                if not resp.ok:
+                    detalle = resp.text.strip().replace("\n", " ")[:220]
+                    ultimo_error = f"({resp.status_code} con '{modelo}'): {detalle}"
+                    break
+                return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+            except Exception as exc:
+                ultimo_error = f"(modelo '{modelo}'): {exc}"
+                if intento < max_intentos:
+                    time.sleep(2 * intento)
+                    continue
+                break
+
+    return f"Gemini no disponible {ultimo_error}".strip()
 
 
 def construir_edicion(num_edicion: int, tema: dict, hechos_semana: str) -> dict:
     base_sistema = (
-        "Eres parte del Comité Editorial y Formativo de FIMOTHY | FINANCIAL ENTERPRISE. "
-        "Mantén un tono sobrio, claro, formativo y estratégico, integrando "
-        "educación financiera, psicología profunda y filosofía práctica sin "
-        "sermones moralistas. No inventes cifras ni noticias que no estén en "
-        "los hechos entregados."
+        "Eres analista y editor de FIMOTHY | FINANCIAL ENTERPRISE. "
+        "Redacta con enfoque estrictamente financiero, técnico, sobrio y "
+        "objetivo: fundamentos, liquidez, incentivos, valoración y gestión de "
+        "riesgo. No inventes cifras, precios ni noticias que no estén en los "
+        "hechos entregados ni des asesoría personalizada."
     )
 
     contexto = (
         f"Edición N.º {num_edicion:02d}\n"
-        f"Tema de la semana: {tema['titulo']}\n"
-        f"Eje formativo: {tema['eje_formativo']}\n"
-        f"Orientación psicológica: {tema['orientacion_psicologica']}\n\n"
-        f"Noticias y hechos de la semana:\n{hechos_semana}\n"
+        f"Eje de la semana: {tema['titulo']}\n"
+        f"Enfoque financiero: {tema['eje_financiero']}\n"
+        f"Gestión de riesgo: {tema['enfoque_riesgo']}\n\n"
+        f"Hechos y datos de la semana:\n{hechos_semana}\n"
     )
 
-    articulo_gemini = consultar_gemini(
-        base_sistema + " Redacta el artículo formativo y de psicología aplicada.",
+    panorama_macro = consultar_gemini(
+        base_sistema + " Redacta el análisis principal de mercado y fundamentos.",
         contexto
-        + "\nEscribe un artículo educativo y bien estructurado (180-240 palabras) "
-        "sobre el tema de la semana y cómo leer noticias o movimientos de empresas "
-        "con criterio y templanza.",
+        + "\nEscribe un análisis financiero claro y estructurado (180-240 palabras) "
+        "sobre el eje de la semana y cómo interpretar los hechos reportados.",
     )
 
-    opinion_grok = consultar_openai_compatible(
-        "https://api.x.ai/v1/chat/completions",
-        GROK_KEY,
-        "grok-3-mini",
-        "Grok",
-        base_sistema + " Aporta un análisis directo, sin rodeos ni autocomplacencia.",
+    lectura_catalizadores = consultar_gemini(
+        base_sistema + " Analiza catalizadores, incentivos y reacción del mercado.",
         contexto
-        + "\nOpina sobre el impacto de subidas, caídas o escándalos en las "
-        "decisiones y qué suele pasar por alto el lector promedio (140-190 palabras).",
+        + "\nExamina qué catalizadores o incentivos importan más en este escenario "
+        "y qué elementos suelen ser ruido de corto plazo (140-190 palabras).",
     )
 
-    opinion_meta = consultar_openai_compatible(
-        "https://api.meta.ai/v1/chat/completions",
-        META_KEY,
-        "muse-spark-1.3",
-        "Meta",
-        base_sistema + " Aporta orientación práctica, estructura de criterio y dinámica social.",
+    riesgos_escenarios = consultar_gemini(
+        base_sistema + " Evalúa riesgos clave, supuestos críticos y escenarios.",
         contexto
-        + "\nDa orientación práctica y formativa sobre la dinámica colectiva ante "
-        "las noticias de la semana y qué hábitos mentales conviene entrenar "
-        "(140-190 palabras).",
+        + "\nDetalla los principales riesgos, supuestos a vigilar y qué "
+        "confirmaría o invalidaría una lectura del escenario (140-190 palabras).",
     )
 
-    debate_comite = consultar_gemini(
-        base_sistema + " Modera y sintetiza el diálogo entre las tres voces.",
+    plan_seguimiento = consultar_gemini(
+        base_sistema + " Sintetiza puntos concretos de monitoreo para la próxima semana.",
         contexto
-        + "\nA continuación tienes los tres aportes del comité:\n"
-        + f"[GEMINI]: {articulo_gemini}\n\n"
-        + f"[GROK]: {opinion_grok}\n\n"
-        + f"[META]: {opinion_meta}\n\n"
-        + "Redacta un breve 'Diálogo y Contraste del Comité' donde las tres IA "
-        "interactúen entre sí: dónde coinciden, qué matices o tensiones aparecen "
-        "y 2 recomendaciones formativas concretas.",
+        + "\nCon base en los análisis anteriores:\n"
+        + f"[PANORAMA]: {panorama_macro}\n\n"
+        + f"[CATALIZADORES]: {lectura_catalizadores}\n\n"
+        + f"[RIESGOS]: {riesgos_escenarios}\n\n"
+        + "Redacta una síntesis ejecutiva y 3 puntos concretos de seguimiento "
+        "financiero y de riesgo para los próximos días.",
     )
 
     return {
-        "articulo_principal": articulo_gemini,
-        "column_grok": opinion_grok,
-        "column_meta": opinion_meta,
-        "dialogo_comite": debate_comite,
+        "panorama_macro": panorama_macro,
+        "lectura_catalizadores": lectura_catalizadores,
+        "riesgos_escenarios": riesgos_escenarios,
+        "plan_seguimiento": plan_seguimiento,
     }
 
 
@@ -267,7 +234,7 @@ class RevistaPDF(FPDF):
         self.set_text_color(195, 208, 225)
         self.set_font("Helvetica", "", 8.5)
         subtitulo = (
-            f"REVISTA SEMANAL  |  EDICION N. {self.num_edicion:02d}  |  {self.fecha_str}"
+            f"REVISTA FINANCIERA SEMANAL  |  EDICION N. {self.num_edicion:02d}  |  {self.fecha_str}"
         )
         self.cell(0, 5, limpiar_texto_pdf(subtitulo), ln=True)
 
@@ -321,7 +288,7 @@ def generar_pdf(
     pdf.set_xy(15, y_actual)
     pdf.set_font("Helvetica", "B", 8.5)
     pdf.set_text_color(140, 105, 40)
-    pdf.cell(0, 4.5, limpiar_texto_pdf("TEMA FORMATIVO Y PSICOLOGIA DE LA SEMANA"), ln=True)
+    pdf.cell(0, 4.5, limpiar_texto_pdf("EJE FINANCIERO DE LA SEMANA"), ln=True)
 
     pdf.set_x(15)
     pdf.set_font("Helvetica", "B", 12)
@@ -331,25 +298,25 @@ def generar_pdf(
     pdf.set_x(15)
     pdf.set_font("Helvetica", "I", 8.5)
     pdf.set_text_color(70, 80, 95)
-    pdf.multi_cell(180, 4.5, limpiar_texto_pdf(f"Enfoque: {tema['eje_formativo']}"))
+    pdf.multi_cell(180, 4.5, limpiar_texto_pdf(f"Enfoque: {tema['eje_financiero']}"))
 
     pdf.ln(7)
 
     pdf.agregar_seccion(
-        "1. Articulo Formativo y Psicologia Aplicada (Gemini)",
-        contenido["articulo_principal"],
+        "1. Panorama Financiero y Fundamentos",
+        contenido["panorama_macro"],
     )
     pdf.agregar_seccion(
-        "2. Lectura Critica ante Noticias y Eventos (Grok)",
-        contenido["column_grok"],
+        "2. Catalizadores, Incentivos y Ruido",
+        contenido["lectura_catalizadores"],
     )
     pdf.agregar_seccion(
-        "3. Orientacion Practica y Dinamica Colectiva (Meta)",
-        contenido["column_meta"],
+        "3. Riesgos Clave y Escenarios",
+        contenido["riesgos_escenarios"],
     )
     pdf.agregar_seccion(
-        "4. Interaccion y Debate del Comite Editorial",
-        contenido["dialogo_comite"],
+        "4. Sintesis y Puntos de Seguimiento",
+        contenido["plan_seguimiento"],
     )
 
     pdf.output(ruta_salida)
@@ -366,7 +333,7 @@ def enviar_telegram(ruta_pdf: str, num_edicion: int, titulo_tema: str) -> None:
 
     caption = limpiar_texto_pdf(
         f"FIMOTHY | FINANCIAL ENTERPRISE - Revista Semanal Ed. N. {num_edicion:02d}\n"
-        f"Tema: {titulo_tema}"
+        f"Eje: {titulo_tema}"
     )[:1000]
 
     with open(ruta_pdf, "rb") as doc:
