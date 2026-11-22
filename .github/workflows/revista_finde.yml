@@ -1,0 +1,32 @@
+name: Revista Semanal FIMOTHY
+
+on:
+  schedule:
+    # Se ejecuta cada sábado a las 15:00 UTC (10:00 AM hora de Guayaquil)
+    - cron: '0 15 * * 6'
+  workflow_dispatch: # Te permite lanzarla manualmente cuando quieras probar
+
+jobs:
+  generar-revista:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar código del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: |
+          pip install requests fpdf2 yfinance
+
+      - name: Ejecutar Revista de Fin de Semana
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+          META_API_KEY: ${{ secrets.META_API_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python revista_finde.py
