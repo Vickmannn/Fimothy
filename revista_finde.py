@@ -344,8 +344,8 @@ def generar_pdf(
 # 5. ENVÍO A TELEGRAM
 # ==============================================================================
 def enviar_telegram(ruta_pdf: str, num_edicion: int, titulo_tema: str) -> None:
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Aviso: TELEGRAM_TOKEN o TELEGRAM_CHAT_ID no configurados.")
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Aviso: TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID no configurados.")
         return
 
     caption = limpiar_texto_pdf(
@@ -355,7 +355,7 @@ def enviar_telegram(ruta_pdf: str, num_edicion: int, titulo_tema: str) -> None:
 
     with open(ruta_pdf, "rb") as doc:
         resp = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument",
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument",
             data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption},
             files={"document": doc},
             timeout=60,
