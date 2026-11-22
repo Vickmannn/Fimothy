@@ -10,7 +10,7 @@ from fpdf import FPDF
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 GROK_KEY = os.environ.get("GROK_API_KEY")
 META_KEY = os.environ.get("META_API_KEY")
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 # ==============================================================================
