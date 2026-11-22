@@ -1,5 +1,6 @@
 import datetime
 import os
+import time
 import unicodedata
 import requests
 from fpdf import FPDF
@@ -120,17 +121,26 @@ def consultar_gemini(prompt_sistema: str, prompt_usuario: str) -> str:
         "contents": [{"role": "user", "parts": [{"text": prompt_usuario}]}],
         "generationConfig": {"temperature": 0.4},
     }
-    try:
-        resp = requests.post(url, json=payload, timeout=60)
-        if not resp.ok:
-            detalle = resp.text.strip().replace("\n", " ")[:300]
-            return (
-                f"Gemini no disponible ({resp.status_code} con modelo "
-                f"'{GEMINI_MODEL}'): {detalle}"
-            )
-        return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except Exception as exc:
-        return f"Gemini no disponible en esta corrida ({exc})."
+    max_intentos = 4
+    for intento in range(1, max_intentos + 1):
+        try:
+            resp = requests.post(url, json=payload, timeout=60)
+            if resp.status_code in (429, 503) and intento < max_intentos:
+                time.sleep(3 * intento)
+                continue
+            if not resp.ok:
+                detalle = resp.text.strip().replace("\n", " ")[:300]
+                return (
+                    f"Gemini no disponible ({resp.status_code} con modelo "
+                    f"'{GEMINI_MODEL}'): {detalle}"
+                )
+            return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except Exception as exc:
+            if intento < max_intentos:
+                time.sleep(3 * intento)
+                continue
+            return f"Gemini no disponible en esta corrida ({exc})."
+    return f"Gemini no disponible en esta corrida con modelo '{GEMINI_MODEL}'."
 
 
 def consultar_openai_compatible(
