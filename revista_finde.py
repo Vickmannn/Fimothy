@@ -8,7 +8,7 @@ from fpdf import FPDF
 # 1. VARIABLES DE ENTORNO (GITHUB SECRETS)
 # ==============================================================================
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 GROK_KEY = os.environ.get("GROK_API_KEY")
 META_KEY = os.environ.get("META_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
