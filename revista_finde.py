@@ -8,6 +8,7 @@ from fpdf import FPDF
 # 1. VARIABLES DE ENTORNO (GITHUB SECRETS)
 # ==============================================================================
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 GROK_KEY = os.environ.get("GROK_API_KEY")
 META_KEY = os.environ.get("META_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -112,7 +113,7 @@ def consultar_gemini(prompt_sistema: str, prompt_usuario: str) -> str:
         return "Clave GEMINI_API_KEY no configurada."
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.5-flash:generateContent?key={GEMINI_KEY}"
+        f"{GEMINI_MODEL}:generateContent?key={GEMINI_KEY}"
     )
     payload = {
         "systemInstruction": {"parts": [{"text": prompt_sistema}]},
@@ -121,7 +122,12 @@ def consultar_gemini(prompt_sistema: str, prompt_usuario: str) -> str:
     }
     try:
         resp = requests.post(url, json=payload, timeout=60)
-        resp.raise_for_status()
+        if not resp.ok:
+            detalle = resp.text.strip().replace("\n", " ")[:300]
+            return (
+                f"Gemini no disponible ({resp.status_code} con modelo "
+                f"'{GEMINI_MODEL}'): {detalle}"
+            )
         return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
     except Exception as exc:
         return f"Gemini no disponible en esta corrida ({exc})."
