@@ -693,7 +693,12 @@ class RevistaFimothyPDF(FPDF):
         super().__init__()
         self.num_edicion = num_edicion
         self.fecha_str = fecha_str
+        self.set_margins(left=12, top=16, right=12)
         self.set_auto_page_break(auto=True, margin=18)
+
+    @property
+    def ancho_util(self) -> float:
+        return self.w - self.l_margin - self.r_margin
 
     def header(self):
         if self.page_no() == 1:
@@ -704,12 +709,14 @@ class RevistaFimothyPDF(FPDF):
         self.set_font("Helvetica", "B", 8.5)
         self.set_text_color(255, 255, 255)
         self.cell(
-            0,
+            self.ancho_util,
             6,
             limpiar_texto_pdf(
                 f"FIMOTHY | FINANCIAL ENTERPRISE   -   EDICION INSTITUCIONAL N. {self.num_edicion:02d} ({self.fecha_str})"
             ),
             align="L",
+            new_x="LMARGIN",
+            new_y="NEXT",
         )
         self.set_draw_color(185, 150, 85)
         self.set_line_width(0.5)
@@ -724,12 +731,14 @@ class RevistaFimothyPDF(FPDF):
         self.set_font("Helvetica", "I", 7.8)
         self.set_text_color(105, 112, 122)
         self.cell(
-            0,
+            self.ancho_util,
             8,
             limpiar_texto_pdf(
                 f"FIMOTHY Financial Enterprise | Inteligencia Cuantitativa & Estrategia | Pagina {self.page_no()}"
             ),
             align="C",
+            new_x="LMARGIN",
+            new_y="NEXT",
         )
 
     def portada(self, editorial: dict, universo: dict, macro_datos: list[dict], conteo_fuentes: dict):
@@ -740,23 +749,36 @@ class RevistaFimothyPDF(FPDF):
         self.set_xy(14, 10)
         self.set_font("Helvetica", "B", 9.5)
         self.set_text_color(205, 170, 95)
-        self.cell(0, 5, limpiar_texto_pdf("PUBLICACION SEMANAL DE INTELIGENCIA FINANCIERA"), ln=True)
+        self.cell(
+            182,
+            5,
+            limpiar_texto_pdf("PUBLICACION SEMANAL DE INTELIGENCIA FINANCIERA"),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
 
         self.set_x(14)
         self.set_font("Helvetica", "B", 22)
         self.set_text_color(255, 255, 255)
-        self.cell(0, 10, limpiar_texto_pdf("FIMOTHY | FINANCIAL ENTERPRISE"), ln=True)
+        self.cell(
+            182,
+            10,
+            limpiar_texto_pdf("FIMOTHY | FINANCIAL ENTERPRISE"),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
 
         self.set_x(14)
         self.set_font("Helvetica", "", 10)
         self.set_text_color(200, 212, 228)
         self.cell(
-            0,
+            182,
             6,
             limpiar_texto_pdf(
                 f"EDICION N. {self.num_edicion:02d}   |   CIERRE SEMANAL: {self.fecha_str}   |   EDICION DE SUSCRIPCION"
             ),
-            ln=True,
+            new_x="LMARGIN",
+            new_y="NEXT",
         )
 
         self.set_draw_color(205, 170, 95)
@@ -766,7 +788,13 @@ class RevistaFimothyPDF(FPDF):
         self.set_xy(14, 63)
         self.set_font("Helvetica", "B", 8.5)
         self.set_text_color(150, 115, 45)
-        self.cell(0, 5, limpiar_texto_pdf("TEMA CENTRAL DE LA EDICION"), ln=True)
+        self.cell(
+            182,
+            5,
+            limpiar_texto_pdf("TEMA CENTRAL DE LA EDICION"),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
 
         self.set_x(14)
         self.set_font("Helvetica", "B", 16.5)
@@ -787,18 +815,36 @@ class RevistaFimothyPDF(FPDF):
         self.set_xy(17, y_box + 2.5)
         self.set_font("Helvetica", "B", 8.5)
         self.set_text_color(18, 28, 46)
-        self.cell(0, 4.5, limpiar_texto_pdf(f"RADAR SECTORIAL ROTATIVO: {universo['nombre_foco']}"), ln=True)
+        self.cell(
+            176,
+            4.5,
+            limpiar_texto_pdf(f"RADAR SECTORIAL ROTATIVO: {universo['nombre_foco']}"),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
         self.set_x(17)
         self.set_font("Helvetica", "", 8.5)
         self.set_text_color(60, 70, 82)
         tickers_txt = ", ".join(f"{t} ({n})" for t, n in universo["activos"])
-        self.cell(0, 5, limpiar_texto_pdf(f"Activos auditados esta semana: {tickers_txt}"), ln=True)
+        self.cell(
+            176,
+            5,
+            limpiar_texto_pdf(f"Activos auditados esta semana: {tickers_txt}"),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
 
         self.ln(7)
         self.set_x(14)
         self.set_font("Helvetica", "B", 10)
         self.set_text_color(18, 28, 46)
-        self.cell(0, 6, limpiar_texto_pdf("TABLERO DE MERCADO Y ACTIVOS DE REFERENCIA"), ln=True)
+        self.cell(
+            182,
+            6,
+            limpiar_texto_pdf("TABLERO DE MERCADO Y ACTIVOS DE REFERENCIA"),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
         self.ln(1.5)
 
         col_w = 58
@@ -819,7 +865,13 @@ class RevistaFimothyPDF(FPDF):
             self.set_xy(x + 3, y + 2.5)
             self.set_font("Helvetica", "B", 8.5)
             self.set_text_color(18, 28, 46)
-            self.cell(col_w - 6, 4.5, limpiar_texto_pdf(f"{item['ticker']} - {item['nombre'][:22]}"), ln=True)
+            self.cell(
+                col_w - 6,
+                4.5,
+                limpiar_texto_pdf(f"{item['ticker']} - {item['nombre'][:22]}"),
+                new_x="LMARGIN",
+                new_y="NEXT",
+            )
 
             self.set_x(x + 3)
             self.set_font("Helvetica", "B", 11)
@@ -833,16 +885,29 @@ class RevistaFimothyPDF(FPDF):
                     col_w - 6,
                     6,
                     limpiar_texto_pdf(f"{item['cierre']:.2f} ({signo}{item['var_sem']:.2f}%)"),
-                    ln=True,
+                    new_x="LMARGIN",
+                    new_y="NEXT",
                 )
             else:
                 self.set_text_color(110, 115, 125)
-                self.cell(col_w - 6, 6, limpiar_texto_pdf("Dato no disponible"), ln=True)
+                self.cell(
+                    col_w - 6,
+                    6,
+                    limpiar_texto_pdf("Dato no disponible"),
+                    new_x="LMARGIN",
+                    new_y="NEXT",
+                )
 
             self.set_x(x + 3)
             self.set_font("Helvetica", "", 7)
             self.set_text_color(100, 108, 118)
-            self.cell(col_w - 6, 4, limpiar_texto_pdf(f"Fuente: {item['fuente']} | {item['fecha']}"), ln=True)
+            self.cell(
+                col_w - 6,
+                4,
+                limpiar_texto_pdf(f"Fuente: {item['fuente']} | {item['fecha']}"),
+                new_x="LMARGIN",
+                new_y="NEXT",
+            )
 
         self.set_y(y_ini + 2 * (row_h + 4) + 4)
 
@@ -854,7 +919,13 @@ class RevistaFimothyPDF(FPDF):
         self.set_xy(17, self.get_y() + 3)
         self.set_font("Helvetica", "B", 8.5)
         self.set_text_color(205, 170, 95)
-        self.cell(0, 4.5, limpiar_texto_pdf("SUMARIO DE LA EDICION & COBERTURA DE DATOS"), ln=True)
+        self.cell(
+            176,
+            4.5,
+            limpiar_texto_pdf("SUMARIO DE LA EDICION & COBERTURA DE DATOS"),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
 
         self.set_x(17)
         self.set_font("Helvetica", "", 8.3)
@@ -872,13 +943,27 @@ class RevistaFimothyPDF(FPDF):
     def titulo_seccion(self, etiqueta: str, titulo: str):
         if self.get_y() > 245:
             self.add_page()
+        self.set_x(self.l_margin)
         self.set_font("Helvetica", "B", 8)
         self.set_text_color(155, 120, 45)
-        self.cell(0, 4.5, limpiar_texto_pdf(etiqueta.upper()), ln=True)
+        self.cell(
+            self.ancho_util,
+            4.5,
+            limpiar_texto_pdf(etiqueta.upper()),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
 
+        self.set_x(self.l_margin)
         self.set_font("Helvetica", "B", 13)
         self.set_text_color(18, 28, 46)
-        self.cell(0, 6.5, limpiar_texto_pdf(titulo), ln=True)
+        self.cell(
+            self.ancho_util,
+            6.5,
+            limpiar_texto_pdf(titulo),
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
 
         self.set_draw_color(185, 150, 85)
         self.set_line_width(0.5)
@@ -886,27 +971,45 @@ class RevistaFimothyPDF(FPDF):
         self.ln(4)
 
     def parrafo(self, texto: str):
+        self.set_x(self.l_margin)
         self.set_font("Helvetica", "", 9.8)
         self.set_text_color(32, 36, 42)
-        self.multi_cell(0, 5.2, limpiar_texto_pdf(texto))
+        self.multi_cell(self.ancho_util, 5.2, limpiar_texto_pdf(texto))
         self.ln(3)
 
     def caja_destacada(self, titulo: str, texto: str):
         if self.get_y() > 235:
             self.add_page()
+        self.set_x(self.l_margin)
         self.set_fill_color(244, 246, 250)
         self.set_draw_color(18, 28, 46)
         self.set_font("Helvetica", "B", 9.5)
         self.set_text_color(18, 28, 46)
-        self.multi_cell(0, 5.5, limpiar_texto_pdf(titulo), fill=True)
+        self.multi_cell(
+            self.ancho_util,
+            5.5,
+            limpiar_texto_pdf(titulo),
+            fill=True,
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+        self.set_x(self.l_margin)
         self.set_font("Helvetica", "", 9.2)
         self.set_text_color(40, 45, 52)
-        self.multi_cell(0, 5, limpiar_texto_pdf(texto), fill=True)
+        self.multi_cell(
+            self.ancho_util,
+            5,
+            limpiar_texto_pdf(texto),
+            fill=True,
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
         self.ln(4)
 
     def tabla_activos(self, filas: list[dict]):
         if self.get_y() > 230:
             self.add_page()
+        self.set_x(self.l_margin)
         headers = ["Ticker", "Compania / Activo", "Precio", "Var. Ref.", "Fecha", "Proveedor"]
         widths = [20, 66, 26, 24, 24, 26]
 
@@ -919,6 +1022,7 @@ class RevistaFimothyPDF(FPDF):
 
         self.set_font("Helvetica", "", 8.5)
         for idx, f in enumerate(filas):
+            self.set_x(self.l_margin)
             fill = idx % 2 == 1
             self.set_fill_color(246, 248, 251)
             self.set_text_color(25, 30, 38)
@@ -989,9 +1093,10 @@ def construir_pdf(
     if noticias:
         for idx, n in enumerate(noticias, start=1):
             linea = f"{idx:02d}. [{n['etiqueta']}] {n['titulo']}  --  ({n['fuente']})"
+            pdf.set_x(pdf.l_margin)
             pdf.set_font("Helvetica", "", 9)
             pdf.set_text_color(30, 35, 42)
-            pdf.multi_cell(0, 4.8, limpiar_texto_pdf(linea))
+            pdf.multi_cell(pdf.ancho_util, 4.8, limpiar_texto_pdf(linea))
             pdf.ln(1.2)
     else:
         pdf.parrafo("No se recibieron titulares nuevos en esta ventana de consulta.")
