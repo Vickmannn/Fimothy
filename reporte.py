@@ -1,366 +1,231 @@
+import datetime
 import os
-import math
-from datetime import datetime, timezone
-import numpy as np
+import re
+import time
+import unicodedata
 import requests
-import yfinance as yf
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 from fpdf import FPDF
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+# ==============================================================================
+# 1. VARIABLES DE ENTORNO (GITHUB SECRETS)
+# ==============================================================================
+ALPHA_VANTAGE_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY")
+FINNHUB_KEY = os.environ.get("FINNHUB_API_KEY")
+MARKETSTACK_KEY = os.environ.get("MARKETSTACK_API_KEY")
+MASSIVE_KEY = os.environ.get("MASSIVE_API_KEY") or os.environ.get("POLYGON_API_KEY")
+MARKETAUX_KEY = os.environ.get("MARKETAUX_API_KEY")
+NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
+NEWSDATA_KEY = os.environ.get("NEWSDATA_API_KEY")
 
-INDICES = {
-    "NASDAQ Composite": "^IXIC",
-    "S&P 500": "^GSPC",
-}
+GROK_KEY = os.environ.get("GROK_API_KEY")
+GROK_MODEL = os.environ.get("GROK_MODEL", "grok-3-mini")
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 
-TECH_UNIVERSE = [
-    "NVDA", "IBM", "INTC", "MSFT", "AAPL", "GOOGL", "META", "AMZN",
-    "AVGO", "AMD", "ORCL", "CRM", "ADBE", "QCOM", "CSCO", "TXN",
-    "MU", "PLTR", "SNOW", "NOW"
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+
+# ==============================================================================
+# 2. UNIVERSOS ROTATIVOS DE ACTIVOS Y EDITORIALES (CAMBIAN CADA SEMANA)
+# ==============================================================================
+BENCHMARKS_MACRO = [
+    ("SPY", "S&P 500 Index ETF"),
+    ("QQQ", "Nasdaq 100 Tech ETF"),
+    ("IWM", "Russell 2000 Small Caps"),
+    ("TLT", "US Treasury 20+Y Bonds"),
+    ("GLD", "Gold Bullion Trust"),
+    ("USO", "US Oil Benchmark"),
 ]
 
-# Paleta institucional sobria (FIMOTHY | FINANCIAL ENTERPRISE)
-NAVY = (17, 29, 54)
-SLATE = (71, 85, 105)
-GOLD = (186, 142, 56)
-DARK_TEXT = (24, 30, 38)
-MUTED_TEXT = (100, 110, 124)
-BG_LIGHT = (244, 246, 250)
-BG_CARD = (250, 251, 253)
-BORDER_GRAY = (214, 220, 229)
-POS_GREEN = (22, 118, 72)
-POS_BG = (232, 246, 238)
-NEG_RED = (168, 42, 48)
-NEG_BG = (252, 235, 236)
-NEU_GRAY = (85, 92, 102)
+UNIVERSOS_SECTORIALES = [
+    {
+        "nombre_foco": "Infraestructura Digital, Semiconductores y Computo",
+        "activos": [
+            ("NVDA", "NVIDIA Corp."),
+            ("ASML", "ASML Holding"),
+            ("AVGO", "Broadcom Inc."),
+            ("MSFT", "Microsoft Corp."),
+        ],
+        "tesis_sectorial": (
+            "La expansion de capacidad de calculo exige inversion intensiva en "
+            "capital (CapEx), energia y litografia avanzada. El punto critico no "
+            "es el crecimiento de ingresos bruto, sino el retorno sobre el capital "
+            "invertido (ROIC) y la sostenibilidad de margenes frente a ciclos de inventario."
+        ),
+    },
+    {
+        "nombre_foco": "Materias Primas Estrategicas, Energia e Industria Pesada",
+        "activos": [
+            ("FCX", "Freeport-McMoRan (Cobre)"),
+            ("XOM", "Exxon Mobil Corp."),
+            ("CAT", "Caterpillar Inc."),
+            ("ALB", "Albemarle Corp. (Litio)"),
+        ],
+        "tesis_sectorial": (
+            "Los insumos fisicos y la maquinaria industrial actuan como cuello de "
+            "botella real de la electrificacion y la reindustrializacion. En este "
+            "segmento mandan el costo marginal de extraccion, la disciplina de deuda "
+            "y el flujo de caja libre en la parte baja del ciclo."
+        ),
+    },
+    {
+        "nombre_foco": "Sistema Financiero, Liquidez y Asignadores de Capital",
+        "activos": [
+            ("JPM", "JPMorgan Chase & Co."),
+            ("BRK.B", "Berkshire Hathaway"),
+            ("GS", "Goldman Sachs Group"),
+            ("BLK", "BlackRock Inc."),
+        ],
+        "tesis_sectorial": (
+            "Las entidades financieras y grandes asignadores reflejan de inmediato "
+            "la pendiente de la curva de tasas, la calidad del credito corporativo y "
+            "los flujos institucionales. La solvencia patrimonial y el costo de "
+            "fondeo determinan quien absorbe volatilidad y quien compra activos baratos."
+        ),
+    },
+    {
+        "nombre_foco": "Salud, Biotecnologia y Consumo Defensivo de Flujo Estable",
+        "activos": [
+            ("LLY", "Eli Lilly and Co."),
+            ("UNH", "UnitedHealth Group"),
+            ("COST", "Costco Wholesale"),
+            ("PG", "Procter & Gamble"),
+        ],
+        "tesis_sectorial": (
+            "Cuando la dispersion macroeconomica sube, los negocios con demanda "
+            "inelastica, poder de fijacion de precios y baja sensibilidad al ciclo "
+            "crediticio sirven como ancla de preservacion y generacion recurrente de caja."
+        ),
+    },
+]
+
+EDITORIALES_SEMANALES = [
+    {
+        "titulo": "El Pensamiento de Segundo Orden ante la Dispersion de Liquidez",
+        "subtitulo": "Por que el consenso suele llegar tarde al precio y como medir asimetrias reales.",
+        "cuerpo": (
+            "En los mercados financieros, el analisis de primer orden reacciona al "
+            "titular inmediato: si una compania supera estimaciones o un indice sube, "
+            "asume continuidad lineal. El analisis institucional de segundo orden "
+            "formula una pregunta distinta: cuanto de ese escenario ya esta descontado "
+            "en los multiplos actuales y que ocurre con la liquidez marginal si las "
+            "condiciones de tasas o credito cambian.\n\n"
+            "Cuando los grandes indices avanzan mientras los segmentos sensibles al "
+            "costo de financiamiento muestran debilidad, el mercado envia una senal "
+            "de selectividad extrema. En ese entorno, la ventaja competitiva del "
+            "analista riguroso consiste en auditar el flujo de caja libre operativo, "
+            "la cobertura de intereses y el costo de oportunidad antes de comprometer capital."
+        ),
+        "caso_estudio": (
+            "CASO DE ESTUDIO: Trampa de Multiplos vs. Calidad de Caja.\n"
+            "Dos empresas del mismo sector crecen al 18% anual. La Empresa A cotiza a "
+            "48x beneficios con flujo de caja libre negativo tras compensacion en "
+            "acciones y deuda creciente; la Empresa B cotiza a 21x con conversion de "
+            "caja superior al 85% y caja neta positiva. Ante un repunte de 40 puntos "
+            "basicos en el rendimiento del bono a 10 anos, la compresion de multiplos "
+            "castiga severamente a A mientras B conserva capacidad de recompra y "
+            "expansion organica."
+        ),
+        "reglas": [
+            "1. Audita conversion de beneficio neto a flujo de caja libre (FCF > 70%).",
+            "2. Exige cobertura de intereses (EBIT / Gasto Financiero) superior a 4x.",
+            "3. Define de antemano el nivel cuantitativo que invalida tu hipotesis.",
+        ],
+    },
+    {
+        "titulo": "Anatomia del Ciclo Crediticio y Costo del Capital",
+        "subtitulo": "Como los tipos de interes reordenan las valoraciones entre duracion corta y larga.",
+        "cuerpo": (
+            "Todo activo financiero es, en ultima instancia, el valor presente de sus "
+            "flujos de caja futuros descontados a una tasa acorde con su riesgo. "
+            "Cuando el costo del dinero abandona niveles artificialmente bajos y se "
+            "estabiliza en mesetas estructuralmente mas altas, la duracion financiera "
+            "se convierte en el factor determinante del rendimiento.\n\n"
+            "Los negocios que prometen rentabilidad a cinco o siete anos sufren una "
+            "penalizacion matematica en su valor actual, mientras que las empresas con "
+            "activos tangibles, poder de fijacion de precios y caja disponible hoy "
+            "ganan poder estrategico para adquirir competidores debilitados."
+        ),
+        "caso_estudio": (
+            "CASO DE ESTUDIO: Refinanciacion en Muro de Vencimientos.\n"
+            "Una compania industrial con deuda estructurada al 3.2% en 2021 enfrenta "
+            "vencimientos significativos que debe renovar al 6.8%. Aunque sus ventas "
+            "se mantengan estables, el incremento del gasto financiero absorbe el 30% "
+            "de su utilidad operativa, reduciendo el margen de seguridad para el accionista."
+        ),
+        "reglas": [
+            "1. Revisa el calendario de vencimientos de deuda a 24 meses de cada emisor.",
+            "2. Compara el rendimiento de flujo de caja libre (FCF Yield) frente al Bono 10Y.",
+            "3. Evita estructuras con apalancamiento elevado en sectores ciclicos.",
+        ],
+    },
+    {
+        "titulo": "Microestructura de Mercado: Volumen, Amplitud y Ruido Informativo",
+        "subtitulo": "Separar acumulacion institucional de movimientos especulativos de corto plazo.",
+        "cuerpo": (
+            "El flujo diario de noticias financieras esta disenado para maximizar "
+            "atencion, no precision analitica. Sin embargo, los grandes participantes "
+            "institucionales dejan huella cuantitativa en el volumen negociado, la "
+            "amplitud del mercado y la rotacion entre sectores defensivos y ciclicos.\n\n"
+            "Observar exclusivamente el precio de cierre sin verificar si el movimiento "
+            "viene acompanado de participacion amplia o concentracion en unos pocos "
+            "titulos conduce a lecturas distorsionadas sobre la salud real de la tendencia."
+        ),
+        "caso_estudio": (
+            "CASO DE ESTUDIO: Divergencia entre Indice Ponderado y Amplitud.\n"
+            "Durante tres semanas consecutivas, el indice principal registra maximos "
+            "impulsados por cuatro megacapitalizaciones, mientras mas del 60% de las "
+            "empresas medianas y pequenas operan bajo su media de 50 sesiones. Esta "
+            "estrechez advierte fragilidad estructural ante cualquier toma de ganancias."
+        ),
+        "reglas": [
+            "1. Contrasta siempre el comportamiento de SPY/QQQ frente a IWM (Small Caps).",
+            "2. Valida rupturas tecnicas unicamente cuando el volumen supera su promedio.",
+            "3. No operes titulares sin confirmar impacto real en ingresos o margenes.",
+        ],
+    },
+    {
+        "titulo": "Gestion de Riesgo Institucional y Preservacion del Capital",
+        "subtitulo": "La asimetria matematica entre perdidas y recuperaciones en portafolios reales.",
+        "cuerpo": (
+            "La supervivencia y composicion de capital a largo plazo dependen mas de "
+            "limitar las caidas profundas que de capturar cada tramo especulativo. "
+            "Una perdida del 50% exige un rendimiento posterior del 100% solo para "
+            "volver al punto de partida, consumiendo tiempo y costo de oportunidad.\n\n"
+            "Por ello, el diseno de portafolio profesional combina activos generadores "
+            "de flujo, cobertura frente a shocks macroeconomicos y liquidez tactica "
+            "lista para desplegarse cuando el mercado liquida activos de calidad por panico."
+        ),
+        "caso_estudio": (
+            "CASO DE ESTUDIO: Dimensionamiento por Volatilidad.\n"
+            "Asignar el mismo peso nominal a un bono del Tesoro y a una accion de alta "
+            "beta produce un portafolio dominado en mas del 85% por el riesgo de la "
+            "accion. Ajustar el tamano de posicion segun volatilidad equilibra la "
+            "contribucion al riesgo total."
+        ),
+        "reglas": [
+            "1. Limita el riesgo maximo por tesis individual a un porcentaje fijo del capital.",
+            "2. Mantiene activos descorrelacionados (liquidez, bonos, materias primas).",
+            "3. Revisa trimestralmente si los fundamentos originales siguen vigentes.",
+        ],
+    },
+]
 
 
-def safe_float(val):
-    try:
-        if val is None:
-            return None
-        f = float(val)
-        return None if (math.isnan(f) or math.isinf(f)) else f
-    except Exception:
-        return None
+def obtener_configuracion_semanal() -> tuple[int, dict, dict]:
+    hoy = datetime.date.today()
+    num_edicion = hoy.isocalendar()[1]
+    editorial = EDITORIALES_SEMANALES[num_edicion % len(EDITORIALES_SEMANALES)]
+    universo = UNIVERSOS_SECTORIALES[num_edicion % len(UNIVERSOS_SECTORIALES)]
+    return num_edicion, editorial, universo
 
 
-def pct_change(current, past):
-    c = safe_float(current)
-    p = safe_float(past)
-    if c is None or p is None or p == 0:
-        return None
-    return ((c - p) / abs(p)) * 100.0
-
-
-def fmt_pct(val):
-    v = safe_float(val)
-    if v is None:
-        return "N/D"
-    sign = "+" if v > 0 else ""
-    return f"{sign}{v:.2f}%"
-
-
-def fmt_num(val, prefix="$", decimals=2):
-    v = safe_float(val)
-    if v is None:
-        return "N/D"
-    return f"{prefix}{v:,.{decimals}f}"
-
-
-def fmt_big(val):
-    v = safe_float(val)
-    if v is None:
-        return "N/D"
-    abs_v = abs(v)
-    sign = "-" if v < 0 else ""
-    if abs_v >= 1e12:
-        return f"{sign}${abs_v / 1e12:.2f}T"
-    if abs_v >= 1e9:
-        return f"{sign}${abs_v / 1e9:.2f}B"
-    if abs_v >= 1e6:
-        return f"{sign}${abs_v / 1e6:.2f}M"
-    return f"{sign}${abs_v:,.0f}"
-
-
-def get_index_snapshot(name, symbol):
-    try:
-        ticker = yf.Ticker(symbol)
-        hist = ticker.history(period="10d", interval="1d")
-        closes = hist["Close"].dropna()
-        if len(closes) >= 2:
-            last_val = float(closes.iloc[-1])
-            prev_val = float(closes.iloc[-2])
-            chg = pct_change(last_val, prev_val)
-            return {
-                "name": name,
-                "symbol": symbol,
-                "value": last_val,
-                "chg_1d": chg,
-            }
-    except Exception:
-        pass
-    return {"name": name, "symbol": symbol, "value": None, "chg_1d": None}
-
-
-def get_period_return(closes, trading_days_back):
-    if closes is None or len(closes) <= trading_days_back:
-        return None
-    latest = float(closes.iloc[-1])
-    past = float(closes.iloc[-(trading_days_back + 1)])
-    return pct_change(latest, past)
-
-
-def analyze_stock(symbol):
-    try:
-        t = yf.Ticker(symbol)
-        hist = t.history(period="6mo", interval="1d")
-        closes = hist["Close"].dropna() if (hist is not None and not hist.empty and "Close" in hist) else None
-        if closes is None or len(closes) < 2:
-            return None
-
-        info = t.info or {}
-        price = float(closes.iloc[-1])
-
-        d_1d = get_period_return(closes, 1)
-        d_2d = get_period_return(closes, 2)
-        d_3d = get_period_return(closes, 3)
-        d_1w = get_period_return(closes, 5)
-        d_15d = get_period_return(closes, 11)
-        d_1m = get_period_return(closes, 21)
-        d_3m = get_period_return(closes, 63)
-
-        rev_growth = safe_float(info.get("revenueGrowth"))
-        earn_growth = safe_float(info.get("earningsGrowth"))
-        rev_growth_pct = rev_growth * 100.0 if rev_growth is not None else None
-        earn_growth_pct = earn_growth * 100.0 if earn_growth is not None else None
-
-        pe_ratio = safe_float(info.get("trailingPE"))
-        fwd_pe = safe_float(info.get("forwardPE"))
-        debt_to_equity = safe_float(info.get("debtToEquity"))
-        profit_margins = safe_float(info.get("profitMargins"))
-        profit_margin_pct = profit_margins * 100.0 if profit_margins is not None else None
-        free_cash_flow = safe_float(info.get("freeCashflow"))
-        market_cap = safe_float(info.get("marketCap"))
-
-        growth_components = [x for x in [earn_growth_pct, rev_growth_pct] if x is not None]
-        fin_growth_score = (sum(growth_components) / len(growth_components)) if growth_components else 0.0
-
-        price_components = [x for x in [d_3m, d_1m, d_1w, d_1d] if x is not None]
-        price_score = (sum(price_components) / len(price_components)) if price_components else 0.0
-
-        combined_score = (0.55 * fin_growth_score) + (0.45 * price_score)
-
-        horizons = [d_1d, d_2d, d_3d, d_1w, d_15d, d_1m, d_3m]
-        valid_horizons = [x for x in horizons if x is not None]
-        positive_count = len([x for x in valid_horizons if x > 0])
-        positive_ratio = positive_count / max(1, len(valid_horizons))
-
-        if positive_ratio >= 0.75 and (earn_growth_pct is None or earn_growth_pct >= 0):
-            projection_label = "Impulso alcista sostenido"
-            projection_detail = (
-                "Mantiene fuerza en la mayoria de los plazos desde 1D hasta 3 meses. El escenario base favorece "
-                "continuidad mientras respete soportes recientes y no pierda ritmo al cierre."
-            )
-        elif positive_ratio >= 0.5:
-            projection_label = "Avance con pausas / selectivo"
-            projection_detail = (
-                "Combina tramos positivos con consolidaciones. Conviene vigilar si el crecimiento de ganancias "
-                "y el volumen respaldan nuevas subidas o si hay toma de ganancias."
-            )
-        else:
-            projection_label = "Fase de ajuste o cautela"
-            projection_detail = (
-                "Presenta presion o retrocesos en varios plazos revisados. Es preferible esperar confirmacion "
-                "de piso antes de asumir que la subida retomara velocidad."
-            )
-
-        fundamental_summary = []
-        if earn_growth_pct is not None:
-            if earn_growth_pct > 15:
-                fundamental_summary.append(f"ganancias creciendo con fuerza ({fmt_pct(earn_growth_pct)})")
-            elif earn_growth_pct > 0:
-                fundamental_summary.append(f"ganancias en expansion moderada ({fmt_pct(earn_growth_pct)})")
-            else:
-                fundamental_summary.append(f"ganancias bajo presion ({fmt_pct(earn_growth_pct)})")
-
-        if debt_to_equity is not None:
-            if debt_to_equity < 80:
-                fundamental_summary.append("endeudamiento contenido")
-            elif debt_to_equity < 180:
-                fundamental_summary.append("deuda moderada frente al patrimonio")
-            else:
-                fundamental_summary.append("apalancamiento elevado a vigilar")
-
-        if free_cash_flow is not None and free_cash_flow > 0:
-            fundamental_summary.append(f"genera caja libre positiva ({fmt_big(free_cash_flow)})")
-
-        plain_read = "; ".join(fundamental_summary) if fundamental_summary else "datos fundamentales parciales en fuente"
-
-        return {
-            "symbol": symbol,
-            "name": info.get("shortName") or info.get("longName") or symbol,
-            "price": price,
-            "d_1d": d_1d,
-            "d_2d": d_2d,
-            "d_3d": d_3d,
-            "d_1w": d_1w,
-            "d_15d": d_15d,
-            "d_1m": d_1m,
-            "d_3m": d_3m,
-            "rev_growth_pct": rev_growth_pct,
-            "earn_growth_pct": earn_growth_pct,
-            "fin_growth_score": fin_growth_score,
-            "price_score": price_score,
-            "pe_ratio": pe_ratio,
-            "fwd_pe": fwd_pe,
-            "debt_to_equity": debt_to_equity,
-            "profit_margin_pct": profit_margin_pct,
-            "free_cash_flow": free_cash_flow,
-            "market_cap": market_cap,
-            "combined_score": combined_score,
-            "projection_label": projection_label,
-            "projection_detail": projection_detail,
-            "plain_read": plain_read,
-        }
-    except Exception:
-        return None
-
-
-def generate_technical_charts(top10, heatmap_path, matrix_path):
-    plt.rcParams["font.sans-serif"] = "DejaVu Sans"
-    plt.rcParams["axes.edgecolor"] = "#CBD5E1"
-    plt.rcParams["axes.linewidth"] = 0.8
-
-    # 1. Mapa de calor multitemporal (Top 10 x 7 horizontes)
-    horizons_keys = ["d_1d", "d_2d", "d_3d", "d_1w", "d_15d", "d_1m", "d_3m"]
-    horizons_labels = ["1D", "2D", "3D", "1Sem", "15D", "1Mes", "3Meses"]
-    symbols = [f"{i}. {item['symbol']}" for i, item in enumerate(top10, 1)]
-
-    matrix_vals = []
-    for item in top10:
-        row = []
-        for k in horizons_keys:
-            v = safe_float(item.get(k))
-            row.append(v if v is not None else np.nan)
-        matrix_vals.append(row)
-    data = np.array(matrix_vals, dtype=float)
-
-    vmax = np.nanmax(np.abs(data)) if np.any(~np.isnan(data)) else 10.0
-    vmax = max(float(vmax), 5.0)
-    vmax = min(vmax, 45.0)
-
-    fig, ax = plt.subplots(figsize=(9.5, 4.6), dpi=260)
-    fig.patch.set_facecolor("#FFFFFF")
-    ax.set_facecolor("#F8FAFC")
-
-    im = ax.imshow(data, cmap="RdYlGn", vmin=-vmax, vmax=vmax, aspect="auto")
-
-    ax.set_xticks(np.arange(len(horizons_labels)))
-    ax.set_yticks(np.arange(len(symbols)))
-    ax.set_xticklabels(horizons_labels, fontsize=9.5, fontweight="bold", color="#111D36")
-    ax.set_yticklabels(symbols, fontsize=9, fontweight="bold", color="#111D36")
-    ax.tick_params(top=True, bottom=False, labeltop=True, labelbottom=False, length=0)
-
-    # Cuadricula sutil entre celdas
-    ax.set_xticks(np.arange(-0.5, len(horizons_labels), 1), minor=True)
-    ax.set_yticks(np.arange(-0.5, len(symbols), 1), minor=True)
-    ax.grid(which="minor", color="#FFFFFF", linestyle="-", linewidth=2)
-    ax.tick_params(which="minor", bottom=False, left=False, top=False)
-
-    for r in range(data.shape[0]):
-        for c in range(data.shape[1]):
-            val = data[r, c]
-            if np.isnan(val):
-                txt = "N/D"
-                col = "#475569"
-            else:
-                sign = "+" if val > 0 else ""
-                txt = f"{sign}{val:.1f}%"
-                col = "#0F172A"
-            ax.text(c, r, txt, ha="center", va="center", fontsize=8, fontweight="bold", color=col)
-
-    cbar = fig.colorbar(im, ax=ax, fraction=0.025, pad=0.03)
-    cbar.ax.tick_params(labelsize=8, colors="#334155")
-    cbar.set_label("Variacion (%)", fontsize=8.5, fontweight="bold", color="#111D36")
-
-    ax.set_title(
-        "FIMOTHY RESEARCH — Mapa de Calor Multitemporal (Top 10 Tecnologicas)",
-        fontsize=11,
-        fontweight="bold",
-        color="#111D36",
-        loc="left",
-        pad=22,
-    )
-    plt.tight_layout()
-    plt.savefig(heatmap_path, dpi=260, facecolor="#FFFFFF")
-    plt.close(fig)
-
-    # 2. Matriz Crecimiento de Negocio vs. Impulso de Precio
-    fig, ax = plt.subplots(figsize=(9.5, 4.5), dpi=260)
-    fig.patch.set_facecolor("#FFFFFF")
-    ax.set_facecolor("#F8FAFC")
-
-    xs = [safe_float(x.get("fin_growth_score")) or 0.0 for x in top10]
-    ys = [safe_float(x.get("price_score")) or 0.0 for x in top10]
-    scores = [safe_float(x.get("combined_score")) or 0.0 for x in top10]
-    sizes = [max(75.0, min(260.0, 90.0 + abs(s) * 2.2)) for s in scores]
-
-    ax.axhline(0, color="#94A3B8", linestyle="--", linewidth=1, zorder=1)
-    ax.axvline(0, color="#94A3B8", linestyle="--", linewidth=1, zorder=1)
-
-    sc = ax.scatter(
-        xs,
-        ys,
-        s=sizes,
-        c=scores,
-        cmap="viridis",
-        alpha=0.88,
-        edgecolors="#111D36",
-        linewidth=1.1,
-        zorder=3,
-    )
-
-    for idx_i, item in enumerate(top10):
-        ax.annotate(
-            f"#{idx_i + 1} {item['symbol']}",
-            (xs[idx_i], ys[idx_i]),
-            xytext=(6, 5),
-            textcoords="offset points",
-            fontsize=8.5,
-            fontweight="bold",
-            color="#111D36",
-            zorder=4,
-        )
-
-    cbar2 = fig.colorbar(sc, ax=ax, fraction=0.025, pad=0.03)
-    cbar2.ax.tick_params(labelsize=8, colors="#334155")
-    cbar2.set_label("Score Combinado", fontsize=8.5, fontweight="bold", color="#111D36")
-
-    ax.set_xlabel("Crecimiento del Negocio Promedio: Ganancias / Ingresos (%)", fontsize=9, fontweight="bold", color="#111D36")
-    ax.set_ylabel("Traccion / Impulso de Precio (%)", fontsize=9, fontweight="bold", color="#111D36")
-    ax.set_title(
-        "FIMOTHY QUANT — Matriz Crecimiento Fundamental vs. Impulso de Mercado",
-        fontsize=11,
-        fontweight="bold",
-        color="#111D36",
-        loc="left",
-        pad=12,
-    )
-    ax.grid(True, linestyle=":", color="#CBD5E1", alpha=0.8, zorder=0)
-
-    plt.tight_layout()
-    plt.savefig(matrix_path, dpi=260, facecolor="#FFFFFF")
-    plt.close(fig)
-
-
-def sanitize_pdf_text(text):
-    replacements = {
+def limpiar_texto_pdf(texto: str) -> str:
+    """Limpia Markdown basico y normaliza caracteres para compatibilidad con FPDF."""
+    texto = re.sub(r"\*\*(.*?)\*\*", r"\1", texto)
+    texto = re.sub(r"__(.*?)__", r"\1", texto)
+    texto = re.sub(r"^#+\s*", "", texto, flags=re.MULTILINE)
+    reemplazos = {
         "—": "-",
         "–": "-",
         "“": '"',
@@ -369,446 +234,885 @@ def sanitize_pdf_text(text):
         "’": "'",
         "•": "*",
         "…": "...",
-        "≥": ">=",
-        "≤": "<=",
+        "€": "EUR ",
+        "£": "GBP ",
+        "→": "->",
+        "✔": "[OK]",
     }
-    for k, v in replacements.items():
-        text = text.replace(k, v)
-    return text.encode("latin-1", errors="replace").decode("latin-1")
+    for orig, dest in reemplazos.items():
+        texto = texto.replace(orig, dest)
+    normalizado = unicodedata.normalize("NFKD", texto)
+    return normalizado.encode("latin-1", "ignore").decode("latin-1")
 
 
-class FimothyPDF(FPDF):
+# ==============================================================================
+# 3. CONECTORES MULTIFUENTE DE DATOS DE MERCADO (BIG DATA FINANCIERO)
+# ==============================================================================
+def consultar_precio_alpha_vantage(ticker: str) -> dict | None:
+    if not ALPHA_VANTAGE_KEY:
+        return None
+    time.sleep(1.3)
+    try:
+        resp = requests.get(
+            "https://www.alphavantage.co/query",
+            params={
+                "function": "TIME_SERIES_DAILY",
+                "symbol": ticker,
+                "outputsize": "compact",
+                "apikey": ALPHA_VANTAGE_KEY,
+            },
+            timeout=25,
+        )
+        serie = resp.json().get("Time Series (Daily)")
+        if not serie:
+            return None
+        fechas = sorted(serie.keys(), reverse=True)
+        cierre = float(serie[fechas[0]]["4. close"])
+        previo = float(serie[fechas[min(5, len(fechas) - 1)]]["4. close"])
+        var_sem = ((cierre - previo) / previo) * 100
+        return {
+            "cierre": cierre,
+            "var_sem": var_sem,
+            "fecha": fechas[0],
+            "fuente": "Alpha Vantage",
+        }
+    except Exception:
+        return None
+
+
+def consultar_precio_finnhub(ticker: str) -> dict | None:
+    if not FINNHUB_KEY:
+        return None
+    try:
+        resp = requests.get(
+            "https://finnhub.io/api/v1/quote",
+            params={"symbol": ticker, "token": FINNHUB_KEY},
+            timeout=20,
+        )
+        data = resp.json()
+        cierre = float(data.get("c") or 0)
+        previo = float(data.get("pc") or 0)
+        if cierre <= 0 or previo <= 0:
+            return None
+        var_dia = ((cierre - previo) / previo) * 100
+        return {
+            "cierre": cierre,
+            "var_sem": var_dia,
+            "fecha": datetime.date.today().isoformat(),
+            "fuente": "Finnhub",
+        }
+    except Exception:
+        return None
+
+
+def consultar_precio_marketstack(ticker: str) -> dict | None:
+    if not MARKETSTACK_KEY:
+        return None
+    try:
+        resp = requests.get(
+            "http://api.marketstack.com/v1/eod",
+            params={
+                "access_key": MARKETSTACK_KEY,
+                "symbols": ticker,
+                "limit": 6,
+            },
+            timeout=25,
+        )
+        filas = resp.json().get("data", [])
+        if not filas:
+            return None
+        cierre = float(filas[0]["close"])
+        previo = float(filas[-1]["close"])
+        var_sem = ((cierre - previo) / previo) * 100
+        fecha = str(filas[0].get("date", ""))[:10]
+        return {
+            "cierre": cierre,
+            "var_sem": var_sem,
+            "fecha": fecha,
+            "fuente": "MarketStack",
+        }
+    except Exception:
+        return None
+
+
+def consultar_precio_massive(ticker: str) -> dict | None:
+    if not MASSIVE_KEY:
+        return None
+    try:
+        resp = requests.get(
+            f"https://api.polygon.io/v2/aggs/ticker/{ticker}/prev",
+            params={"adjusted": "true", "apiKey": MASSIVE_KEY},
+            timeout=25,
+        )
+        res = resp.json().get("results", [])
+        if not res:
+            return None
+        cierre = float(res[0]["c"])
+        apertura = float(res[0]["o"])
+        var = ((cierre - apertura) / apertura) * 100 if apertura else 0.0
+        return {
+            "cierre": cierre,
+            "var_sem": var,
+            "fecha": datetime.date.today().isoformat(),
+            "fuente": "Massive/Polygon",
+        }
+    except Exception:
+        return None
+
+
+def obtener_cotizacion_consolidada(ticker: str, nombre: str, preferir_externo: bool = False) -> dict:
+    """
+    Combina multiples proveedores de datos financieros.
+    Para benchmarks macro prioriza series semanales (Alpha Vantage / MarketStack);
+    para el universo sectorial rotativo prioriza Finnhub / Massive / MarketStack
+    para distribuir cuotas entre todas las APIs.
+    """
+    orden = (
+        [
+            consultar_precio_finnhub,
+            consultar_precio_massive,
+            consultar_precio_marketstack,
+            consultar_precio_alpha_vantage,
+        ]
+        if preferir_externo
+        else [
+            consultar_precio_alpha_vantage,
+            consultar_precio_marketstack,
+            consultar_precio_finnhub,
+            consultar_precio_massive,
+        ]
+    )
+
+    for fn in orden:
+        dato = fn(ticker)
+        if dato:
+            return {
+                "ticker": ticker,
+                "nombre": nombre,
+                "cierre": dato["cierre"],
+                "var_sem": dato["var_sem"],
+                "fecha": dato["fecha"],
+                "fuente": dato["fuente"],
+            }
+
+    return {
+        "ticker": ticker,
+        "nombre": nombre,
+        "cierre": None,
+        "var_sem": None,
+        "fecha": "N/D",
+        "fuente": "Sin respuesta",
+    }
+
+
+def recolectar_datos_mercado(universo: dict) -> tuple[list[dict], list[dict]]:
+    macro_datos = [
+        obtener_cotizacion_consolidada(t, n, preferir_externo=False)
+        for t, n in BENCHMARKS_MACRO
+    ]
+    sectorial_datos = [
+        obtener_cotizacion_consolidada(t, n, preferir_externo=True)
+        for t, n in universo["activos"]
+    ]
+    return macro_datos, sectorial_datos
+
+
+# ==============================================================================
+# 4. CONECTORES MULTIFUENTE DE NOTICIAS E INTELIGENCIA DE MERCADO
+# ==============================================================================
+def noticias_alpha_vantage() -> list[dict]:
+    if not ALPHA_VANTAGE_KEY:
+        return []
+    try:
+        resp = requests.get(
+            "https://www.alphavantage.co/query",
+            params={
+                "function": "NEWS_SENTIMENT",
+                "topics": "financial_markets,economy_macro",
+                "limit": 8,
+                "apikey": ALPHA_VANTAGE_KEY,
+            },
+            timeout=25,
+        )
+        items = resp.json().get("feed", [])
+        return [
+            {
+                "titulo": i.get("title", ""),
+                "fuente": f"AlphaVantage/{i.get('source', 'Mercado')}",
+                "etiqueta": i.get("overall_sentiment_label", "Macro"),
+            }
+            for i in items[:4]
+            if i.get("title")
+        ]
+    except Exception:
+        return []
+
+
+def noticias_finnhub() -> list[dict]:
+    if not FINNHUB_KEY:
+        return []
+    try:
+        resp = requests.get(
+            "https://finnhub.io/api/v1/news",
+            params={"category": "general", "token": FINNHUB_KEY},
+            timeout=20,
+        )
+        items = resp.json()
+        if not isinstance(items, list):
+            return []
+        return [
+            {
+                "titulo": i.get("headline", ""),
+                "fuente": f"Finnhub/{i.get('source', 'General')}",
+                "etiqueta": "Mercado Global",
+            }
+            for i in items[:4]
+            if i.get("headline")
+        ]
+    except Exception:
+        return []
+
+
+def noticias_marketaux(tickers: list[str]) -> list[dict]:
+    if not MARKETAUX_KEY:
+        return []
+    try:
+        resp = requests.get(
+            "https://api.marketaux.com/v1/news/all",
+            params={
+                "symbols": ",".join(tickers),
+                "filter_entities": "true",
+                "language": "en,es",
+                "limit": 3,
+                "api_token": MARKETAUX_KEY,
+            },
+            timeout=25,
+        )
+        items = resp.json().get("data", [])
+        return [
+            {
+                "titulo": i.get("title", ""),
+                "fuente": f"Marketaux/{i.get('source', 'Corporativo')}",
+                "etiqueta": "Radar Sectorial",
+            }
+            for i in items[:3]
+            if i.get("title")
+        ]
+    except Exception:
+        return []
+
+
+def noticias_newsapi() -> list[dict]:
+    if not NEWS_API_KEY:
+        return []
+    try:
+        resp = requests.get(
+            "https://newsapi.org/v2/everything",
+            params={
+                "q": "(stock market OR Federal Reserve OR inflation OR earnings)",
+                "sortBy": "publishedAt",
+                "pageSize": 5,
+                "apiKey": NEWS_API_KEY,
+            },
+            timeout=25,
+        )
+        items = resp.json().get("articles", [])
+        return [
+            {
+                "titulo": i.get("title", ""),
+                "fuente": f"NewsAPI/{(i.get('source') or {}).get('name', 'Prensa')}",
+                "etiqueta": "Coyuntura",
+            }
+            for i in items[:4]
+            if i.get("title") and "[Removed]" not in i.get("title", "")
+        ]
+    except Exception:
+        return []
+
+
+def noticias_newsdata() -> list[dict]:
+    if not NEWSDATA_KEY:
+        return []
+    try:
+        resp = requests.get(
+            "https://newsdata.io/api/1/latest",
+            params={
+                "apikey": NEWSDATA_KEY,
+                "q": "finance OR economy OR markets",
+                "category": "business",
+            },
+            timeout=25,
+        )
+        items = resp.json().get("results", [])
+        return [
+            {
+                "titulo": i.get("title", ""),
+                "fuente": f"NewsData/{i.get('source_id', 'Business')}",
+                "etiqueta": "Global Business",
+            }
+            for i in items[:4]
+            if i.get("title")
+        ]
+    except Exception:
+        return []
+
+
+def recolectar_noticias_consolidadas(tickers_sectoriales: list[str]) -> tuple[list[dict], dict]:
+    fuentes = {
+        "Alpha Vantage": noticias_alpha_vantage(),
+        "Finnhub": noticias_finnhub(),
+        "Marketaux": noticias_marketaux(tickers_sectoriales),
+        "NewsAPI.org": noticias_newsapi(),
+        "NewsData.io": noticias_newsdata(),
+    }
+
+    vistas = set()
+    consolidadas = []
+    conteo_por_fuente = {}
+
+    for nombre_fuente, lista in fuentes.items():
+        conteo_por_fuente[nombre_fuente] = len(lista)
+        for item in lista:
+            clave = re.sub(r"\W+", "", item["titulo"].lower())[:55]
+            if clave and clave not in vistas:
+                vistas.add(clave)
+                consolidadas.append(item)
+
+    return consolidadas[:14], conteo_por_fuente
+
+
+# ==============================================================================
+# 5. CIERRE ANALÍTICO IA (1 LLAMADA A GROK + 1 LLAMADA FINAL A GEMINI)
+# ==============================================================================
+def consultar_grok_critico(resumen_datos: str) -> str:
+    if not GROK_KEY:
+        return "Clave GROK_API_KEY no configurada."
+    try:
+        resp = requests.post(
+            "https://api.x.ai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GROK_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": GROK_MODEL,
+                "temperature": 0.35,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Eres el Analista Cuantitativo Critico de FIMOTHY | FINANCIAL ENTERPRISE. "
+                            "Escribe en texto plano sin Markdown. Evalua exclusivamente los datos "
+                            "y titulares entregados, diferenciando senal estructural de ruido."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"{resumen_datos}\n\n"
+                            "Redacta un analisis critico de 170-220 palabras sobre lo que "
+                            "ocurrio en los mercados y sectores monitoreados, que riesgos "
+                            "subestima el consenso y donde hay divergencias relevantes."
+                        ),
+                    },
+                ],
+            },
+            timeout=60,
+        )
+        if not resp.ok:
+            detalle = resp.text.strip().replace("\n", " ")[:220]
+            return f"Grok no disponible ({resp.status_code}): {detalle}"
+        return resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception as exc:
+        return f"Grok no disponible en esta corrida ({exc})."
+
+
+def consultar_gemini_conclusion(resumen_total: str) -> str:
+    if not GEMINI_KEY:
+        return "Clave GEMINI_API_KEY no configurada."
+
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{GEMINI_MODEL}:generateContent?key={GEMINI_KEY}"
+    )
+    payload = {
+        "systemInstruction": {
+            "parts": [
+                {
+                    "text": (
+                        "Eres el Director Editorial de FIMOTHY | FINANCIAL ENTERPRISE. "
+                        "Escribe en texto plano institucional (sin asteriscos ni Markdown). "
+                        "Integra datos cuantitativos y titulares reales sin inventar cifras."
+                    )
+                }
+            ]
+        },
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "text": (
+                            f"{resumen_total}\n\n"
+                            "Redacta la Sintesis Ejecutiva y Prospectiva Semanal (200-250 palabras): "
+                            "1) balance sintetico de lo ocurrido esta semana, 2) escenarios a vigilar "
+                            "la proxima semana y 3) tres indicadores concretos de control de riesgo."
+                        )
+                    }
+                ],
+            }
+        ],
+        "generationConfig": {"temperature": 0.35},
+    }
+
+    max_intentos = 3
+    ultimo_error = ""
+    for intento in range(1, max_intentos + 1):
+        try:
+            resp = requests.post(url, json=payload, timeout=60)
+            if resp.status_code in (429, 503):
+                detalle = resp.text.strip().replace("\n", " ")[:220]
+                ultimo_error = f"({resp.status_code} con '{GEMINI_MODEL}'): {detalle}"
+                if intento < max_intentos:
+                    time.sleep(3 * intento)
+                    continue
+                break
+            if not resp.ok:
+                detalle = resp.text.strip().replace("\n", " ")[:220]
+                return f"Gemini no disponible ({resp.status_code}): {detalle}"
+            return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except Exception as exc:
+            ultimo_error = f"({exc})"
+            if intento < max_intentos:
+                time.sleep(3 * intento)
+                continue
+            break
+
+    return f"Gemini no disponible en esta corrida {ultimo_error}".strip()
+
+
+# ==============================================================================
+# 6. MAQUETACIÓN PDF EDITORIAL DE SUSCRIPCIÓN (MULTIPÁGINA INSTITUCIONAL)
+# ==============================================================================
+class RevistaFimothyPDF(FPDF):
+    def __init__(self, num_edicion: int, fecha_str: str):
+        super().__init__()
+        self.num_edicion = num_edicion
+        self.fecha_str = fecha_str
+        self.set_auto_page_break(auto=True, margin=18)
+
     def header(self):
-        banner_h = 24
-        self.set_fill_color(*NAVY)
-        self.rect(0, 0, self.w, banner_h, style="F")
-
-        self.set_fill_color(*GOLD)
-        self.rect(0, banner_h, self.w, 1.8, style="F")
-
-        self.set_xy(self.l_margin, 4.5)
+        if self.page_no() == 1:
+            return
+        self.set_fill_color(18, 28, 46)
+        self.rect(0, 0, 210, 14, "F")
+        self.set_xy(12, 4)
+        self.set_font("Helvetica", "B", 8.5)
         self.set_text_color(255, 255, 255)
-        self.set_font("Helvetica", "B", 16.5)
         self.cell(
-            self.epw * 0.65,
-            7.5,
-            sanitize_pdf_text("FIMOTHY"),
-            new_x="RIGHT",
-            new_y="TOP",
+            0,
+            6,
+            limpiar_texto_pdf(
+                f"FIMOTHY | FINANCIAL ENTERPRISE   -   EDICION INSTITUCIONAL N. {self.num_edicion:02d} ({self.fecha_str})"
+            ),
             align="L",
         )
-
-        self.set_font("Helvetica", "B", 8.5)
-        self.set_text_color(226, 194, 122)
-        self.cell(
-            self.epw * 0.35,
-            7.5,
-            sanitize_pdf_text("INSTITUTIONAL TECH BRIEF"),
-            new_x="LMARGIN",
-            new_y="NEXT",
-            align="R",
-        )
-
-        self.set_xy(self.l_margin, 13)
-        self.set_text_color(214, 222, 235)
-        self.set_font("Helvetica", "B", 8.5)
-        self.cell(
-            self.epw,
-            5,
-            sanitize_pdf_text("FINANCIAL ENTERPRISE"),
-            new_x="LMARGIN",
-            new_y="NEXT",
-            align="L",
-        )
-
-        self.set_text_color(*DARK_TEXT)
-        self.set_y(banner_h + 7)
+        self.set_draw_color(185, 150, 85)
+        self.set_line_width(0.5)
+        self.line(12, 15.5, 198, 15.5)
+        self.ln(13)
 
     def footer(self):
-        self.set_y(-14)
-        self.set_draw_color(*BORDER_GRAY)
-        self.line(self.l_margin, self.get_y() - 1.5, self.w - self.r_margin, self.get_y() - 1.5)
-        self.set_text_color(*MUTED_TEXT)
+        self.set_y(-13)
+        self.set_draw_color(215, 220, 228)
+        self.set_line_width(0.3)
+        self.line(12, self.get_y(), 198, self.get_y())
         self.set_font("Helvetica", "I", 7.8)
-        self.set_x(self.l_margin)
+        self.set_text_color(105, 112, 122)
         self.cell(
-            self.epw,
+            0,
             8,
-            sanitize_pdf_text(
-                f"FIMOTHY - Financial Enterprise  |  Analisis informativo, no constituye asesoria financiera  |  Pag. {self.page_no()}/{{nb}}"
+            limpiar_texto_pdf(
+                f"FIMOTHY Financial Enterprise | Inteligencia Cuantitativa & Estrategia | Pagina {self.page_no()}"
             ),
             align="C",
         )
 
+    def portada(self, editorial: dict, universo: dict, macro_datos: list[dict], conteo_fuentes: dict):
+        self.add_page()
+        # Banda superior institucional
+        self.set_fill_color(18, 28, 46)
+        self.rect(0, 0, 210, 56, "F")
 
-def pdf_paragraph(pdf, text, h=5.0, bold=False, size=8.8, color=DARK_TEXT, space_after=1.5):
-    pdf.set_text_color(*color)
-    pdf.set_font("Helvetica", "B" if bold else "", size)
-    pdf.set_x(pdf.l_margin)
-    pdf.multi_cell(pdf.epw, h, sanitize_pdf_text(text))
-    if space_after > 0:
-        pdf.ln(space_after)
+        self.set_xy(14, 10)
+        self.set_font("Helvetica", "B", 9.5)
+        self.set_text_color(205, 170, 95)
+        self.cell(0, 5, limpiar_texto_pdf("PUBLICACION SEMANAL DE INTELIGENCIA FINANCIERA"), ln=True)
+
+        self.set_x(14)
+        self.set_font("Helvetica", "B", 22)
+        self.set_text_color(255, 255, 255)
+        self.cell(0, 10, limpiar_texto_pdf("FIMOTHY | FINANCIAL ENTERPRISE"), ln=True)
+
+        self.set_x(14)
+        self.set_font("Helvetica", "", 10)
+        self.set_text_color(200, 212, 228)
+        self.cell(
+            0,
+            6,
+            limpiar_texto_pdf(
+                f"EDICION N. {self.num_edicion:02d}   |   CIERRE SEMANAL: {self.fecha_str}   |   EDICION DE SUSCRIPCION"
+            ),
+            ln=True,
+        )
+
+        self.set_draw_color(205, 170, 95)
+        self.set_line_width(0.8)
+        self.line(14, 48, 196, 48)
+
+        # Titular de portada
+        self.set_xy(14, 63)
+        self.set_font("Helvetica", "B", 8.5)
+        self.set_text_color(150, 115, 45)
+        self.cell(0, 5, limpiar_texto_pdf("TEMA CENTRAL DE LA EDICION"), ln=True)
+
+        self.set_x(14)
+        self.set_font("Helvetica", "B", 16.5)
+        self.set_text_color(18, 28, 46)
+        self.multi_cell(182, 7.5, limpiar_texto_pdf(editorial["titulo"]))
+
+        self.ln(1.5)
+        self.set_x(14)
+        self.set_font("Helvetica", "I", 10)
+        self.set_text_color(75, 85, 98)
+        self.multi_cell(182, 5.2, limpiar_texto_pdf(editorial["subtitulo"]))
+
+        # Foco sectorial de la semana
+        self.ln(4)
+        y_box = self.get_y()
+        self.set_fill_color(244, 246, 250)
+        self.set_draw_color(200, 208, 220)
+        self.rect(14, y_box, 182, 16, "DF")
+        self.set_xy(17, y_box + 2.5)
+        self.set_font("Helvetica", "B", 8.5)
+        self.set_text_color(18, 28, 46)
+        self.cell(0, 4.5, limpiar_texto_pdf(f"RADAR SECTORIAL ROTATIVO: {universo['nombre_foco']}"), ln=True)
+        self.set_x(17)
+        self.set_font("Helvetica", "", 8.5)
+        self.set_text_color(60, 70, 82)
+        tickers_txt = ", ".join(f"{t} ({n})" for t, n in universo["activos"])
+        self.cell(0, 5, limpiar_texto_pdf(f"Activos auditados esta semana: {tickers_txt}"), ln=True)
+
+        # Tablero cuantitativo de portada (6 benchmarks)
+        self.ln(7)
+        self.set_x(14)
+        self.set_font("Helvetica", "B", 10)
+        self.set_text_color(18, 28, 46)
+        self.cell(0, 6, limpiar_texto_pdf("TABLERO DE MERCADO Y ACTIVOS DE REFERENCIA"), ln=True)
+        self.ln(1.5)
+
+        col_w = 58
+        row_h = 22
+        x_ini = 14
+        y_ini = self.get_y()
+
+        for idx, item in enumerate(macro_datos[:6]):
+            col = idx % 3
+            fila = idx // 3
+            x = x_ini + col * (col_w + 4)
+            y = y_ini + fila * (row_h + 4)
+
+            self.set_fill_color(250, 251, 253)
+            self.set_draw_color(205, 212, 222)
+            self.rect(x, y, col_w, row_h, "DF")
+
+            self.set_xy(x + 3, y + 2.5)
+            self.set_font("Helvetica", "B", 8.5)
+            self.set_text_color(18, 28, 46)
+            self.cell(col_w - 6, 4.5, limpiar_texto_pdf(f"{item['ticker']} - {item['nombre'][:22]}"), ln=True)
+
+            self.set_x(x + 3)
+            self.set_font("Helvetica", "B", 11)
+            if item["cierre"] is not None:
+                signo = "+" if item["var_sem"] >= 0 else ""
+                if item["var_sem"] >= 0:
+                    self.set_text_color(22, 115, 65)
+                else:
+                    self.set_text_color(175, 45, 45)
+                self.cell(
+                    col_w - 6,
+                    6,
+                    limpiar_texto_pdf(f"{item['cierre']:.2f} ({signo}{item['var_sem']:.2f}%)"),
+                    ln=True,
+                )
+            else:
+                self.set_text_color(110, 115, 125)
+                self.cell(col_w - 6, 6, limpiar_texto_pdf("Dato no disponible"), ln=True)
+
+            self.set_x(x + 3)
+            self.set_font("Helvetica", "", 7)
+            self.set_text_color(100, 108, 118)
+            self.cell(col_w - 6, 4, limpiar_texto_pdf(f"Fuente: {item['fuente']} | {item['fecha']}"), ln=True)
+
+        self.set_y(y_ini + 2 * (row_h + 4) + 4)
+
+        # Resumen de fuentes conectadas y sumario
+        activas = [f"{k} ({v})" for k, v in conteo_fuentes.items() if v > 0]
+        fuentes_str = ", ".join(activas) if activas else "Conectores en espera de cuota"
+
+        self.set_fill_color(18, 28, 46)
+        self.rect(14, self.get_y(), 182, 28, "F")
+        self.set_xy(17, self.get_y() + 3)
+        self.set_font("Helvetica", "B", 8.5)
+        self.set_text_color(205, 170, 95)
+        self.cell(0, 4.5, limpiar_texto_pdf("SUMARIO DE LA EDICION & COBERTURA DE DATOS"), ln=True)
+
+        self.set_x(17)
+        self.set_font("Helvetica", "", 8.3)
+        self.set_text_color(235, 240, 246)
+        self.multi_cell(
+            176,
+            4.3,
+            limpiar_texto_pdf(
+                "01. Carta Editorial & Caso de Estudio  |  02. Radiografia Sectorial & Tabla Comparativa\n"
+                "03. Radar Global de Noticias Multifuente  |  04. Lectura Critica (Grok) & Sintesis Ejecutiva (Gemini)\n"
+                f"Fuentes de noticias activas en esta corrida: {fuentes_str}"
+            ),
+        )
+
+    def titulo_seccion(self, etiqueta: str, titulo: str):
+        if self.get_y() > 245:
+            self.add_page()
+        self.set_font("Helvetica", "B", 8)
+        self.set_text_color(155, 120, 45)
+        self.cell(0, 4.5, limpiar_texto_pdf(etiqueta.upper()), ln=True)
+
+        self.set_font("Helvetica", "B", 13)
+        self.set_text_color(18, 28, 46)
+        self.cell(0, 6.5, limpiar_texto_pdf(titulo), ln=True)
+
+        self.set_draw_color(185, 150, 85)
+        self.set_line_width(0.5)
+        self.line(12, self.get_y() + 1, 198, self.get_y() + 1)
+        self.ln(4)
+
+    def parrafo(self, texto: str):
+        self.set_font("Helvetica", "", 9.8)
+        self.set_text_color(32, 36, 42)
+        self.multi_cell(0, 5.2, limpiar_texto_pdf(texto))
+        self.ln(3)
+
+    def caja_destacada(self, titulo: str, texto: str):
+        if self.get_y() > 235:
+            self.add_page()
+        self.set_fill_color(244, 246, 250)
+        self.set_draw_color(18, 28, 46)
+        self.set_font("Helvetica", "B", 9.5)
+        self.set_text_color(18, 28, 46)
+        self.multi_cell(0, 5.5, limpiar_texto_pdf(titulo), fill=True)
+        self.set_font("Helvetica", "", 9.2)
+        self.set_text_color(40, 45, 52)
+        self.multi_cell(0, 5, limpiar_texto_pdf(texto), fill=True)
+        self.ln(4)
+
+    def tabla_activos(self, filas: list[dict]):
+        if self.get_y() > 230:
+            self.add_page()
+        headers = ["Ticker", "Compania / Activo", "Precio", "Var. Ref.", "Fecha", "Proveedor"]
+        widths = [20, 66, 26, 24, 24, 26]
+
+        self.set_fill_color(18, 28, 46)
+        self.set_text_color(255, 255, 255)
+        self.set_font("Helvetica", "B", 8.5)
+        for h, w in zip(headers, widths):
+            self.cell(w, 7, limpiar_texto_pdf(h), border=1, align="C", fill=True)
+        self.ln()
+
+        self.set_font("Helvetica", "", 8.5)
+        for idx, f in enumerate(filas):
+            fill = idx % 2 == 1
+            self.set_fill_color(246, 248, 251)
+            self.set_text_color(25, 30, 38)
+
+            precio_txt = f"{f['cierre']:.2f}" if f["cierre"] is not None else "N/D"
+            if f["var_sem"] is not None:
+                signo = "+" if f["var_sem"] >= 0 else ""
+                var_txt = f"{signo}{f['var_sem']:.2f}%"
+            else:
+                var_txt = "N/D"
+
+            valores = [
+                f["ticker"],
+                f["nombre"][:32],
+                precio_txt,
+                var_txt,
+                f["fecha"],
+                f["fuente"][:14],
+            ]
+            aligns = ["C", "L", "R", "R", "C", "C"]
+            for val, w, al in zip(valores, widths, aligns):
+                self.cell(w, 6.5, limpiar_texto_pdf(val), border=1, align=al, fill=fill)
+            self.ln()
+        self.ln(4)
 
 
-def pdf_section_title(pdf, title, subtitle=None):
-    pdf.ln(3)
-    pdf.set_x(pdf.l_margin)
-    y_top = pdf.get_y()
-    box_h = 11.5 if subtitle else 8.0
-    if y_top + box_h > pdf.h - pdf.b_margin:
-        pdf.add_page()
-        y_top = pdf.get_y()
+def construir_pdf(
+    num_edicion: int,
+    fecha_str: str,
+    editorial: dict,
+    universo: dict,
+    macro_datos: list[dict],
+    sectorial_datos: list[dict],
+    noticias: list[dict],
+    conteo_fuentes: dict,
+    lectura_grok: str,
+    conclusion_gemini: str,
+    ruta_salida: str = "revista_fimothy_semanal.pdf",
+) -> str:
+    pdf = RevistaFimothyPDF(num_edicion=num_edicion, fecha_str=fecha_str)
 
-    pdf.set_fill_color(*BG_LIGHT)
-    pdf.rect(pdf.l_margin, y_top, pdf.epw, box_h, style="F")
-    pdf.set_fill_color(*GOLD)
-    pdf.rect(pdf.l_margin, y_top, 2.8, box_h, style="F")
+    # Pagina 1: Portada ejecutiva
+    pdf.portada(editorial, universo, macro_datos, conteo_fuentes)
 
-    pdf.set_xy(pdf.l_margin + 5.5, y_top + 1.3)
-    pdf.set_text_color(*NAVY)
-    pdf.set_font("Helvetica", "B", 10.5)
-    pdf.cell(pdf.epw - 6, 5.2, sanitize_pdf_text(title), new_x="LMARGIN", new_y="NEXT", align="L")
-
-    if subtitle:
-        pdf.set_x(pdf.l_margin + 5.5)
-        pdf.set_text_color(*MUTED_TEXT)
-        pdf.set_font("Helvetica", "", 8.0)
-        pdf.cell(pdf.epw - 6, 4.2, sanitize_pdf_text(subtitle), new_x="LMARGIN", new_y="NEXT", align="L")
-
-    pdf.set_text_color(*DARK_TEXT)
-    pdf.ln(3)
-
-
-def draw_kpi_cards(pdf, indices_data, top10):
-    pdf.set_x(pdf.l_margin)
-    y0 = pdf.get_y()
-    card_h = 18.0
-    gap = 3.0
-    card_w = (pdf.epw - gap * 2) / 3.0
-
-    nasdaq = indices_data[0] if len(indices_data) > 0 else {"name": "NASDAQ", "value": None, "chg_1d": None}
-    sp500 = indices_data[1] if len(indices_data) > 1 else {"name": "S&P 500", "value": None, "chg_1d": None}
-    leader = top10[0] if len(top10) > 0 else {"symbol": "N/D", "price": None, "combined_score": 0.0}
-
-    cards = [
-        (
-            "NASDAQ COMPOSITE",
-            fmt_num(nasdaq.get("value"), prefix="", decimals=2),
-            f"Variacion 1D: {fmt_pct(nasdaq.get('chg_1d'))}",
-            safe_float(nasdaq.get("chg_1d")),
-        ),
-        (
-            "S&P 500 INDEX",
-            fmt_num(sp500.get("value"), prefix="", decimals=2),
-            f"Variacion 1D: {fmt_pct(sp500.get('chg_1d'))}",
-            safe_float(sp500.get("chg_1d")),
-        ),
-        (
-            "LIDER TOP 10",
-            f"{leader.get('symbol')} ({fmt_num(leader.get('price'))})",
-            f"Score combinado: {leader.get('combined_score', 0.0):.2f}",
-            safe_float(leader.get("combined_score")),
-        ),
-    ]
-
-    for idx_c, (label, main_val, sub_val, tone_val) in enumerate(cards):
-        x0 = pdf.l_margin + idx_c * (card_w + gap)
-        pdf.set_fill_color(*BG_CARD)
-        pdf.set_draw_color(*BORDER_GRAY)
-        pdf.rect(x0, y0, card_w, card_h, style="DF")
-
-        top_bar_col = NAVY if idx_c == 2 else (POS_GREEN if (tone_val is not None and tone_val >= 0) else NEG_RED)
-        pdf.set_fill_color(*top_bar_col)
-        pdf.rect(x0, y0, card_w, 1.4, style="F")
-
-        pdf.set_xy(x0 + 2.5, y0 + 2.6)
-        pdf.set_text_color(*MUTED_TEXT)
-        pdf.set_font("Helvetica", "B", 7.2)
-        pdf.cell(card_w - 5, 3.8, sanitize_pdf_text(label), align="L")
-
-        pdf.set_xy(x0 + 2.5, y0 + 6.8)
-        pdf.set_text_color(*NAVY)
-        pdf.set_font("Helvetica", "B", 10.2)
-        pdf.cell(card_w - 5, 5.0, sanitize_pdf_text(main_val), align="L")
-
-        pdf.set_xy(x0 + 2.5, y0 + 12.2)
-        if tone_val is not None and idx_c < 2:
-            pdf.set_text_color(*(POS_GREEN if tone_val >= 0 else NEG_RED))
-        else:
-            pdf.set_text_color(*SLATE)
-        pdf.set_font("Helvetica", "B", 7.8)
-        pdf.cell(card_w - 5, 4.0, sanitize_pdf_text(sub_val), align="L")
-
-    pdf.set_y(y0 + card_h + 3)
-
-
-def draw_stock_card(pdf, rank, item):
-    # Reserva espacio aproximado para evitar cabecera huerfana
-    needed_h = 28.0
-    if pdf.get_y() + needed_h > pdf.h - pdf.b_margin:
-        pdf.add_page()
-
-    x0 = pdf.l_margin
-    y0 = pdf.get_y()
-
-    # Encabezado de fila de empresa
-    pdf.set_fill_color(*BG_LIGHT)
-    pdf.set_draw_color(*BORDER_GRAY)
-    pdf.rect(x0, y0, pdf.epw, 6.8, style="DF")
-
-    pdf.set_xy(x0 + 2.5, y0 + 1.1)
-    pdf.set_text_color(*NAVY)
-    pdf.set_font("Helvetica", "B", 9.2)
-    title_str = f"#{rank}  {item['name']} ({item['symbol']})  —  Precio: {fmt_num(item['price'])}"
-    pdf.cell(pdf.epw * 0.72, 4.6, sanitize_pdf_text(title_str), align="L")
-
-    pdf.set_text_color(*GOLD)
-    pdf.set_font("Helvetica", "B", 8.5)
-    pdf.cell(
-        pdf.epw * 0.25,
-        4.6,
-        sanitize_pdf_text(f"Score: {item['combined_score']:.2f}"),
-        align="R",
-    )
-
-    pdf.set_y(y0 + 7.6)
-
-    # Tabla de 7 horizontes (1D, 2D, 3D, 1Sem, 15D, 1Mes, 3Meses)
-    cols = [
-        ("1D", item["d_1d"]),
-        ("2D", item["d_2d"]),
-        ("3D", item["d_3d"]),
-        ("1Sem", item["d_1w"]),
-        ("15D", item["d_15d"]),
-        ("1Mes", item["d_1m"]),
-        ("3Meses", item["d_3m"]),
-    ]
-    col_w = pdf.epw / len(cols)
-    t_y = pdf.get_y()
-
-    for idx_col, (h_label, h_val) in enumerate(cols):
-        cx = x0 + idx_col * col_w
-        num_v = safe_float(h_val)
-
-        # Cabecera del plazo
-        pdf.set_fill_color(235, 239, 245)
-        pdf.set_draw_color(*BORDER_GRAY)
-        pdf.rect(cx, t_y, col_w, 4.5, style="DF")
-        pdf.set_xy(cx, t_y + 0.5)
-        pdf.set_text_color(*SLATE)
-        pdf.set_font("Helvetica", "B", 7.2)
-        pdf.cell(col_w, 3.5, sanitize_pdf_text(h_label), align="C")
-
-        # Valor porcentual con color semantico
-        if num_v is not None and num_v > 0:
-            pdf.set_fill_color(*POS_BG)
-            txt_col = POS_GREEN
-        elif num_v is not None and num_v < 0:
-            pdf.set_fill_color(*NEG_BG)
-            txt_col = NEG_RED
-        else:
-            pdf.set_fill_color(255, 255, 255)
-            txt_col = NEU_GRAY
-
-        pdf.rect(cx, t_y + 4.5, col_w, 5.2, style="DF")
-        pdf.set_xy(cx, t_y + 5.1)
-        pdf.set_text_color(*txt_col)
-        pdf.set_font("Helvetica", "B", 7.6)
-        pdf.cell(col_w, 4.0, sanitize_pdf_text(fmt_pct(h_val)), align="C")
-
-    pdf.set_y(t_y + 11.0)
-
-    # Crecimiento de negocio + lectura clara
-    growth_line = (
-        f"Crecimiento del negocio: Ganancias {fmt_pct(item['earn_growth_pct'])}  |  "
-        f"Ingresos {fmt_pct(item['rev_growth_pct'])}"
-    )
-    pdf_paragraph(pdf, growth_line, h=4.5, bold=True, size=8.0, color=SLATE, space_after=0.8)
-    pdf_paragraph(pdf, f"Lectura: {item['plain_read'].capitalize()}.", h=4.6, bold=False, size=8.3, color=DARK_TEXT, space_after=2.5)
-
-
-def build_pdf(filepath, now_str, indices_data, top10):
-    heatmap_path = "/tmp/fimothy_heatmap.png"
-    matrix_path = "/tmp/fimothy_matrix.png"
-    generate_technical_charts(top10, heatmap_path, matrix_path)
-
-    pdf = FimothyPDF()
-    pdf.alias_nb_pages()
-    pdf.set_margins(left=14, top=30, right=14)
-    pdf.set_auto_page_break(auto=True, margin=17)
+    # Pagina 2: Carta Editorial, Caso de Estudio y Reglas
     pdf.add_page()
-
-    pdf_paragraph(
-        pdf,
-        "Radar Tecnologico — Top 10 Empresas (Crecimiento del Negocio + Impulso)",
-        h=5.8,
-        bold=True,
-        size=11.5,
-        color=NAVY,
-        space_after=0.8,
-    )
-    pdf_paragraph(
-        pdf,
-        f"Emision: {now_str}  |  Universo: Tecnologia (incluye NVDA, IBM, INTC y lideres del sector)",
-        h=4.5,
-        bold=False,
-        size=8.0,
-        color=MUTED_TEXT,
-        space_after=2.5,
+    pdf.titulo_seccion("Seccion 01  |  Estrategia & Marco Conceptual", editorial["titulo"])
+    pdf.parrafo(editorial["cuerpo"])
+    pdf.caja_destacada("APLICACION PRACTICA DE LA SEMANA", editorial["caso_estudio"])
+    pdf.caja_destacada(
+        "FILTROS CUANTITATIVOS DE ASIGNACION FIMOTHY",
+        "\n".join(editorial["reglas"]),
     )
 
-    draw_kpi_cards(pdf, indices_data, top10)
-
-    pdf_section_title(
-        pdf,
-        "1. Ranking Top 10 y Comparativas Multitemporales (1D a 3 Meses)",
-        "Ordenado por combinacion de crecimiento financiero (ganancias/ingresos) y traccion de precio.",
-    )
-    for rank, item in enumerate(top10, 1):
-        draw_stock_card(pdf, rank, item)
-
-    # Pagina dedicada a graficos tecnicos
+    # Pagina 3: Radiografia Sectorial Rotativa y Tabla Consolidada
     pdf.add_page()
-    pdf_section_title(
-        pdf,
-        "2. Analisis Grafico Tecnico — Estructura de Impulso y Crecimiento",
-        "Visualizacion cuantitativa de los 7 horizontes temporales y del posicionamiento de cada empresa.",
+    pdf.titulo_seccion(
+        "Seccion 02  |  Big Data & Enfoque Sectorial Rotativo",
+        universo["nombre_foco"],
     )
+    pdf.parrafo(universo["tesis_sectorial"])
+    pdf.tabla_activos(sectorial_datos)
 
-    if os.path.exists(heatmap_path):
-        pdf.set_x(pdf.l_margin)
-        y_img1 = pdf.get_y()
-        pdf.image(heatmap_path, x=pdf.l_margin, y=y_img1, w=pdf.epw)
-        pdf.set_y(y_img1 + (pdf.epw * 4.6 / 9.5) + 4)
+    pdf.titulo_seccion(
+        "Seccion 03  |  Radar de Noticias Financieras Multifuente",
+        "Flujo Informativo Consolidado (Alpha Vantage, Finnhub, Marketaux, NewsAPI, NewsData)",
+    )
+    if noticias:
+        for idx, n in enumerate(noticias, start=1):
+            linea = f"{idx:02d}. [{n['etiqueta']}] {n['titulo']}  --  ({n['fuente']})"
+            pdf.set_font("Helvetica", "", 9)
+            pdf.set_text_color(30, 35, 42)
+            pdf.multi_cell(0, 4.8, limpiar_texto_pdf(linea))
+            pdf.ln(1.2)
+    else:
+        pdf.parrafo("No se recibieron titulares nuevos en esta ventana de consulta.")
 
-    if os.path.exists(matrix_path):
-        if pdf.get_y() + (pdf.epw * 4.5 / 9.5) > pdf.h - pdf.b_margin:
-            pdf.add_page()
-        pdf.set_x(pdf.l_margin)
-        y_img2 = pdf.get_y()
-        pdf.image(matrix_path, x=pdf.l_margin, y=y_img2, w=pdf.epw)
-        pdf.set_y(y_img2 + (pdf.epw * 4.5 / 9.5) + 3)
-
-    # Proyeccion y escenarios
+    # Pagina 4: Analisis Critico (Grok) y Sintesis Ejecutiva Final (Gemini)
     pdf.add_page()
-    pdf_section_title(
-        pdf,
-        "3. Proyeccion y Escenarios Operativos",
-        "Lectura condicional segun consistencia de plazos (1D-3Meses) y expansion de beneficios.",
+    pdf.titulo_seccion(
+        "Seccion 04  |  Contraste Analitico de Mercado",
+        "Lectura Critica y Deteccion de Sesgos (Grok)",
     )
-    for item in top10:
-        if pdf.get_y() + 14 > pdf.h - pdf.b_margin:
-            pdf.add_page()
-        pdf_paragraph(
-            pdf,
-            f"{item['symbol']} ({item['name']}) — {item['projection_label']}",
-            h=4.8,
-            bold=True,
-            size=8.8,
-            color=NAVY,
-            space_after=0.5,
-        )
-        pdf_paragraph(
-            pdf,
-            item["projection_detail"],
-            h=4.6,
-            bold=False,
-            size=8.4,
-            color=DARK_TEXT,
-            space_after=2.2,
-        )
+    pdf.parrafo(lectura_grok)
 
-    # Bloque fundamental como resumen final
-    pdf_section_title(
-        pdf,
-        "4. Resumen Final — Bloque Fundamental",
-        "Solidez financiera, valoracion, margenes, apalancamiento y generacion de caja libre.",
+    pdf.titulo_seccion(
+        "Seccion 05  |  Cierre Institucional & Prospectiva",
+        "Sintesis Ejecutiva y Escenarios de la Semana (Gemini)",
     )
-    for item in top10:
-        if pdf.get_y() + 14 > pdf.h - pdf.b_margin:
-            pdf.add_page()
-        pdf_paragraph(
-            pdf,
-            f"{item['name']} ({item['symbol']})",
-            h=4.8,
-            bold=True,
-            size=8.8,
-            color=NAVY,
-            space_after=0.5,
+    pdf.parrafo(conclusion_gemini)
+
+    pdf.caja_destacada(
+        "EXENCION DE RESPONSABILIDAD INSTITUCIONAL",
+        "Publicacion elaborada por FIMOTHY | FINANCIAL ENTERPRISE con fines estrictamente "
+        "formativos, estadisticos y de investigacion de mercado. No constituye recomendacion "
+        "personalizada de inversion ni oferta de valores.",
+    )
+
+    pdf.output(ruta_salida)
+    return ruta_salida
+
+
+# ==============================================================================
+# 7. ENVÍO A TELEGRAM
+# ==============================================================================
+def enviar_telegram(ruta_pdf: str, num_edicion: int, titulo: str, foco: str) -> None:
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Aviso: TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID no configurados.")
+        return
+
+    caption = limpiar_texto_pdf(
+        f"FIMOTHY | FINANCIAL ENTERPRISE - Edicion N. {num_edicion:02d}\n"
+        f"Editorial: {titulo}\n"
+        f"Foco Sectorial: {foco}"
+    )[:1000]
+
+    with open(ruta_pdf, "rb") as doc:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument",
+            data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption},
+            files={"document": doc},
+            timeout=60,
         )
-        fund_txt = (
-            f"Cap. Mercado: {fmt_big(item['market_cap'])}  |  P/E: {fmt_num(item['pe_ratio'], prefix='', decimals=1)}  |  "
-            f"P/E Futuro: {fmt_num(item['fwd_pe'], prefix='', decimals=1)}  |  Margen Neto: {fmt_pct(item['profit_margin_pct'])}  |  "
-            f"Deuda/Patrimonio: {fmt_num(item['debt_to_equity'], prefix='', decimals=1)}  |  Caja Libre: {fmt_big(item['free_cash_flow'])}"
-        )
-        pdf_paragraph(
-            pdf,
-            fund_txt,
-            h=4.6,
-            bold=False,
-            size=8.3,
-            color=SLATE,
-            space_after=2.2,
-        )
-
-    pdf.output(filepath)
-
-
-def send_telegram_message(text):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": text,
-    }
-    resp = requests.post(url, json=payload, timeout=30)
-    resp.raise_for_status()
-
-
-def send_telegram_document(filepath, caption=""):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
-    with open(filepath, "rb") as f:
-        files = {"document": (os.path.basename(filepath), f, "application/pdf")}
-        data = {"chat_id": CHAT_ID, "caption": caption[:1020]}
-        resp = requests.post(url, data=data, files=files, timeout=60)
         resp.raise_for_status()
 
 
-def main():
-    if not BOT_TOKEN or not CHAT_ID:
-        raise RuntimeError("Faltan TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID en variables de entorno.")
+# ==============================================================================
+# 8. PUNTO DE ENTRADA PRINCIPAL
+# ==============================================================================
+def main() -> None:
+    num_edicion, editorial, universo = obtener_configuracion_semanal()
+    fecha_str = datetime.date.today().strftime("%d/%m/%Y")
 
-    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    macro_datos, sectorial_datos = recolectar_datos_mercado(universo)
+    tickers_sec = [t for t, _ in universo["activos"]]
+    noticias, conteo_fuentes = recolectar_noticias_consolidadas(tickers_sec)
 
-    indices_data = [get_index_snapshot(name, sym) for name, sym in INDICES.items()]
+    # Construye el dossier cuantitativo para la unica llamada a Grok y la unica a Gemini
+    lineas_dossier = [
+        f"EDICION N. {num_edicion:02d} | FECHA: {fecha_str}",
+        f"EDITORIAL: {editorial['titulo']}",
+        f"FOCO SECTORIAL: {universo['nombre_foco']}",
+        "\nBENCHMARKS MACRO:",
+    ]
+    for m in macro_datos:
+        if m["cierre"] is not None:
+            lineas_dossier.append(
+                f"- {m['ticker']} ({m['nombre']}): {m['cierre']:.2f} ({m['var_sem']:+.2f}%) [{m['fuente']}]"
+            )
 
-    analyzed = []
-    for sym in TECH_UNIVERSE:
-        res = analyze_stock(sym)
-        if res is not None:
-            analyzed.append(res)
+    lineas_dossier.append("\nACTIVOS SECTORIALES DE LA SEMANA:")
+    for s in sectorial_datos:
+        if s["cierre"] is not None:
+            lineas_dossier.append(
+                f"- {s['ticker']} ({s['nombre']}): {s['cierre']:.2f} ({s['var_sem']:+.2f}%) [{s['fuente']}]"
+            )
 
-    analyzed.sort(key=lambda x: x["combined_score"], reverse=True)
-    top10 = analyzed[:10]
+    lineas_dossier.append("\nTITULARES FINANCIEROS CONSOLIDADOS:")
+    for n in noticias[:10]:
+        lineas_dossier.append(f"- [{n['fuente']}] {n['titulo']}")
 
-    # Mensaje limpio en Telegram: encabezado, fecha, indices y Top 10
-    lines = []
-    lines.append("FIMOTHY | FINANCIAL ENTERPRISE")
-    lines.append("RADAR TECNOLOGICO — TOP 10 (CRECIMIENTO + IMPULSO)")
-    lines.append(f"Fecha: {now_utc}")
-    lines.append("")
-    lines.append("INDICES DE REFERENCIA:")
-    for idx in indices_data:
-        lines.append(f"• {idx['name']}: {fmt_num(idx['value'], prefix='')} ({fmt_pct(idx['chg_1d'])})")
-    lines.append("")
-    lines.append("Comparativas completas (1D a 3M), graficos tecnicos, proyeccion y bloque fundamental final en el PDF adjunto.")
-    send_telegram_message("\n".join(lines))
+    dossier_completo = "\n".join(lineas_dossier)
 
-    pdf_path = "/tmp/Fimothy_Institutional_Tech_Report.pdf"
-    build_pdf(pdf_path, now_utc, indices_data, top10)
-    send_telegram_document(
-        pdf_path,
-        caption="FIMOTHY - Financial Enterprise | Informe Institucional, Graficos Tecnicos y Bloque Fundamental."
+    lectura_grok = consultar_grok_critico(dossier_completo)
+    conclusion_gemini = consultar_gemini_conclusion(
+        f"{dossier_completo}\n\nLECTURA CRITICA DE GROK:\n{lectura_grok}"
     )
+
+    ruta_pdf = construir_pdf(
+        num_edicion=num_edicion,
+        fecha_str=fecha_str,
+        editorial=editorial,
+        universo=universo,
+        macro_datos=macro_datos,
+        sectorial_datos=sectorial_datos,
+        noticias=noticias,
+        conteo_fuentes=conteo_fuentes,
+        lectura_grok=lectura_grok,
+        conclusion_gemini=conclusion_gemini,
+    )
+
+    enviar_telegram(ruta_pdf, num_edicion, editorial["titulo"], universo["nombre_foco"])
+    print(f"Revista institucional generada con exito: {ruta_pdf}")
 
 
 if __name__ == "__main__":
