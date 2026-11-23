@@ -22,8 +22,8 @@ jobs:
         run: |
           pip install requests fpdf2 yfinance
 
- - name: Ejecutar Revista de Fin de Semana
-          env:
+      - name: Ejecutar Revista de Fin de Semana
+        env:
           ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           MARKETSTACK_API_KEY: ${{ secrets.MARKETSTACK_API_KEY }}
@@ -35,4 +35,4 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          run: python revista_finde.py
+       run: python revista_finde.py
