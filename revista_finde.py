@@ -3,8 +3,12 @@ import os
 import re
 import time
 import unicodedata
+import matplotlib
 import requests
 from fpdf import FPDF
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 # ==============================================================================
 # 1. VARIABLES DE ENTORNO (GITHUB SECRETS - SIN IA)
@@ -856,7 +860,80 @@ def construir_analisis_semanal_y_proyecciones(datos: dict, conteo_fuentes: dict)
 
 
 # ==============================================================================
-# 6. MAQUETACION PDF EDITORIAL EXTENDIDA (SIN IA)
+# 6. GENERACION DE GRAFICOS (NASDAQ, S&P 500 Y RUSSELL 2000)
+# ==============================================================================
+def generar_grafico_barras(filas: list[dict], titulo: str, ruta_png: str) -> str | None:
+    validos = [f for f in filas if f["var_sem"] is not None]
+    if not validos:
+        return None
+
+    tickers = [f["ticker"] for f in validos][::-1]
+    valores = [float(f["var_sem"]) for f in validos][::-1]
+    colores = ["#167341" if v >= 0 else "#AF2D2D" for v in valores]
+
+    plt.figure(figsize=(8.2, 3.6))
+    plt.rcParams["font.sans-serif"] = "DejaVu Sans"
+    ax = plt.gca()
+    ax.set_facecolor("#FAFBFD")
+    plt.gcf().patch.set_facecolor("white")
+
+    barras = plt.barh(tickers, valores, color=colores, height=0.58, edgecolor="none")
+    plt.axvline(0, color="#121C2E", linewidth=0.9)
+    plt.grid(axis="x", linestyle="--", alpha=0.45, color="#8A96A8")
+    ax.set_axisbelow(True)
+
+    plt.title(titulo, fontsize=10.5, fontweight="bold", color="#121C2E", pad=10, loc="left")
+    plt.xlabel("Variacion (%) de referencia en la muestra", fontsize=8.5, color="#3C4652")
+    plt.tick_params(axis="both", labelsize=8.5, colors="#1F2630")
+
+    max_abs = max([abs(v) for v in valores] + [1.0])
+    margen_x = max_abs * 0.22
+    plt.xlim(-max_abs - margen_x, max_abs + margen_x)
+
+    for barra, val in zip(barras, valores):
+        desp = max_abs * 0.03 if val >= 0 else -max_abs * 0.03
+        alineacion = "left" if val >= 0 else "right"
+        plt.text(
+            val + desp,
+            barra.get_y() + barra.get_height() / 2,
+            f"{val:+.2f}%",
+            va="center",
+            ha=alineacion,
+            fontsize=8,
+            fontweight="bold",
+            color="#167341" if val >= 0 else "#AF2D2D",
+        )
+
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    plt.tight_layout()
+    plt.savefig(ruta_png, dpi=180)
+    plt.close()
+    return ruta_png
+
+
+def generar_graficos_tres_indices(datos: dict) -> dict:
+    return {
+        "nasdaq": generar_grafico_barras(
+            datos["nasdaq10"],
+            "Grafico Nasdaq 100 (Top 10) - Variacion Porcentual",
+            "grafico_nasdaq.png",
+        ),
+        "sp500": generar_grafico_barras(
+            datos["sp500_10"],
+            "Grafico S&P 500 (Top 10) - Variacion Porcentual",
+            "grafico_sp500.png",
+        ),
+        "russell2000": generar_grafico_barras(
+            datos["russell2000"],
+            "Grafico Russell 2000 (2,000 Small Caps / Muestra) - Variacion Porcentual",
+            "grafico_russell2000.png",
+        ),
+    }
+
+
+# ==============================================================================
+# 7. MAQUETACION PDF EDITORIAL CON GRAFICOS (SIN IA)
 # ==============================================================================
 class RevistaFimothyPDF(FPDF):
     def __init__(self, num_edicion: int, fecha_str: str):
@@ -904,7 +981,7 @@ class RevistaFimothyPDF(FPDF):
             self.ancho_util,
             8,
             limpiar_texto_pdf(
-                f"FIMOTHY Financial Enterprise | Mercados, Analisis Semanal, Proyecciones y Psicologia | Pagina {self.page_no()}"
+                f"FIMOTHY Financial Enterprise | Mercados, Graficos, Analisis Semanal y Psicologia | Pagina {self.page_no()}"
             ),
             align="C",
             new_x="LMARGIN",
@@ -945,7 +1022,7 @@ class RevistaFimothyPDF(FPDF):
             182,
             6,
             limpiar_texto_pdf(
-                f"EDICION N. {self.num_edicion:02d}   |   CIERRE SEMANAL: {self.fecha_str}   |   EDICION AMPLIADA"
+                f"EDICION N. {self.num_edicion:02d}   |   CIERRE SEMANAL: {self.fecha_str}   |   CON GRAFICOS"
             ),
             new_x="LMARGIN",
             new_y="NEXT",
@@ -999,7 +1076,9 @@ class RevistaFimothyPDF(FPDF):
         self.cell(
             176,
             5,
-            limpiar_texto_pdf(f"Canasta sectorial: {tickers_txt}  |  Incluye Top 10, Filtro Nasdaq/S&P 500 y Russell 2000"),
+            limpiar_texto_pdf(
+                f"Canasta sectorial: {tickers_txt}  |  Graficos: Nasdaq 100, S&P 500 y Russell 2000"
+            ),
             new_x="LMARGIN",
             new_y="NEXT",
         )
@@ -1105,7 +1184,7 @@ class RevistaFimothyPDF(FPDF):
             4.2,
             limpiar_texto_pdf(
                 "01. Editorial & Caso Practico  |  02. Psicologia del Inversor  |  03. Analisis Semanal & Proyecciones\n"
-                "04. Top 10 Empresas & Filtro Nasdaq vs S&P 500  |  05. Russell 2000 (2,000) & Sectorial\n"
+                "04. Top 10, Filtro Nasdaq vs S&P 500 y Graficos  |  05. Russell 2000 (Grafico) & Sectorial\n"
                 f"06. Radar de Noticias en Espanol  |  Fuentes activas: {fuentes_str}"
             ),
         )
@@ -1176,6 +1255,16 @@ class RevistaFimothyPDF(FPDF):
         )
         self.ln(3.5)
 
+    def insertar_grafico(self, ruta_png: str | None, ancho_mm: float = 184):
+        if not ruta_png or not os.path.exists(ruta_png):
+            self.parrafo("Grafico no disponible por falta de datos numericos en esta corrida.")
+            return
+        if self.get_y() > 195:
+            self.add_page()
+        self.set_x(self.l_margin + (self.ancho_util - ancho_mm) / 2)
+        self.image(ruta_png, w=ancho_mm)
+        self.ln(3)
+
     def tabla_activos(self, filas: list[dict], titulo_col_extra: str = "Segmento / Foco"):
         if self.get_y() > 220:
             self.add_page()
@@ -1239,6 +1328,7 @@ def construir_pdf(
     psicologia: dict,
     datos: dict,
     analisis: dict,
+    graficos: dict,
     noticias: list[dict],
     conteo_fuentes: dict,
     ruta_salida: str = "revista_fimothy_semanal.pdf",
@@ -1276,7 +1366,7 @@ def construir_pdf(
         analisis["proyecciones_prox_semana"],
     )
 
-    # 5. Top 10 empresas mas importantes + Filtro Nasdaq 100 vs S&P 500
+    # 5. Top 10 empresas mas importantes + Filtro Nasdaq 100 vs S&P 500 + Graficos
     pdf.add_page()
     pdf.titulo_seccion(
         "Seccion 04  |  Las 10 Empresas Clave y Filtro Nasdaq vs. S&P 500",
@@ -1290,9 +1380,12 @@ def construir_pdf(
     )
     pdf.caja_destacada("RESULTADO DEL FILTRO NASDAQ 100 VS. S&P 500", analisis["filtro_texto"])
     pdf.tabla_activos(datos["nasdaq10"], titulo_col_extra="Referencia Nasdaq")
-    pdf.tabla_activos(datos["sp500_10"], titulo_col_extra="Referencia S&P 500")
+    pdf.insertar_grafico(graficos.get("nasdaq"))
 
-    # 6. Russell 2000 (2,000 pequenas empresas) y Universo Sectorial Rotativo
+    pdf.tabla_activos(datos["sp500_10"], titulo_col_extra="Referencia S&P 500")
+    pdf.insertar_grafico(graficos.get("sp500"))
+
+    # 6. Russell 2000 (2,000 pequenas empresas) + Grafico + Universo Sectorial
     pdf.add_page()
     pdf.titulo_seccion(
         "Seccion 05  |  Russell 2000 (2,000 Empresas Pequenas) y Sectorial",
@@ -1304,6 +1397,7 @@ def construir_pdf(
         "riesgo mas alla de las grandes corporaciones."
     )
     pdf.tabla_activos(datos["russell2000"], titulo_col_extra="Amplitud / Tema")
+    pdf.insertar_grafico(graficos.get("russell2000"))
 
     pdf.titulo_seccion(
         "Enfoque Sectorial Rotativo de la Semana",
@@ -1325,7 +1419,7 @@ def construir_pdf(
     pdf.parrafo(
         "Nota editorial: Los titulares originales provenientes de proveedores internacionales "
         "conservan su redaccion de origen, mientras que las etiquetas, categorias, "
-        "analisis y proyecciones de la revista se presentan en espanol."
+        "analisis, graficos y proyecciones de la revista se presentan en espanol."
     )
 
     if noticias:
@@ -1356,7 +1450,7 @@ def construir_pdf(
 
 
 # ==============================================================================
-# 7. ENVIO A TELEGRAM
+# 8. ENVIO A TELEGRAM
 # ==============================================================================
 def enviar_telegram(ruta_pdf: str, num_edicion: int, titulo: str, foco: str) -> None:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -1380,7 +1474,7 @@ def enviar_telegram(ruta_pdf: str, num_edicion: int, titulo: str, foco: str) -> 
 
 
 # ==============================================================================
-# 8. PUNTO DE ENTRADA PRINCIPAL (SIN LLAMADAS A IA)
+# 9. PUNTO DE ENTRADA PRINCIPAL (SIN LLAMADAS A IA)
 # ==============================================================================
 def main() -> None:
     num_edicion, editorial, universo, psicologia = obtener_configuracion_semanal()
@@ -1390,6 +1484,7 @@ def main() -> None:
     tickers_sec = [t for t, _ in universo["activos"]]
     noticias, conteo_fuentes = recolectar_noticias_consolidadas(tickers_sec)
     analisis = construir_analisis_semanal_y_proyecciones(datos, conteo_fuentes)
+    graficos = generar_graficos_tres_indices(datos)
 
     ruta_pdf = construir_pdf(
         num_edicion=num_edicion,
@@ -1399,12 +1494,13 @@ def main() -> None:
         psicologia=psicologia,
         datos=datos,
         analisis=analisis,
+        graficos=graficos,
         noticias=noticias,
         conteo_fuentes=conteo_fuentes,
     )
 
     enviar_telegram(ruta_pdf, num_edicion, editorial["titulo"], universo["nombre_foco"])
-    print(f"Revista institucional ampliada generada con exito: {ruta_pdf}")
+    print(f"Revista institucional con graficos generada con exito: {ruta_pdf}")
 
 
 if __name__ == "__main__":
