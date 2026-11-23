@@ -1302,7 +1302,7 @@ def construir_pdf_integrado(
             limpiar_texto_pdf(f"Estado conectores noticias -> {', '.join(activas)}"),
         )
 
-    ruta_pdf = "Fimothy_Institutional_Tech_Report_Integrado_v3.pdf"
+    ruta_pdf = "Fimothy_Institutional_Tech_Report.pdf"
     pdf.output(ruta_pdf)
     return ruta_pdf
 
