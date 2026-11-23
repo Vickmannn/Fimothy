@@ -21,15 +21,63 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 # ==============================================================================
-# 2. UNIVERSOS ROTATIVOS, PSICOLOGIA DEL MERCADO Y EDITORIALES
+# 2. BENCHMARKS, TOP 10 EMPRESAS, FILTRO NASDAQ VS S&P 500 Y RUSSELL 2000
 # ==============================================================================
 BENCHMARKS_MACRO = [
-    ("SPY", "S&P 500 Index ETF"),
-    ("QQQ", "Nasdaq 100 Tech ETF"),
-    ("IWM", "Russell 2000 Small Caps"),
-    ("TLT", "US Treasury 20+Y Bonds"),
-    ("GLD", "Gold Bullion Trust"),
-    ("USO", "US Oil Benchmark"),
+    ("SPY", "S&P 500 ETF (Top 500)"),
+    ("QQQ", "Nasdaq 100 ETF (Tecnologia)"),
+    ("IWM", "Russell 2000 ETF (2,000 Small Caps)"),
+    ("TLT", "Bonos Tesoro EE.UU. 20+ Anos"),
+    ("GLD", "Oro Fisico (Refugio / Valor)"),
+    ("USO", "Petroleo Crudo (Energia)"),
+]
+
+TOP_10_EMPRESAS = [
+    ("AAPL", "Apple Inc.", "Consumo Tech / Ecosistema"),
+    ("MSFT", "Microsoft Corp.", "Nube / Software Empresarial"),
+    ("NVDA", "NVIDIA Corp.", "Semiconductores / IA"),
+    ("AMZN", "Amazon.com Inc.", "Nube AWS / Comercio"),
+    ("GOOGL", "Alphabet Inc.", "Busqueda / Publicidad / Nube"),
+    ("META", "Meta Platforms", "Redes / Monetizacion Digital"),
+    ("BRK.B", "Berkshire Hathaway", "Conglomerado / Seguros / Caja"),
+    ("LLY", "Eli Lilly and Co.", "Farmaceutica / Salud"),
+    ("AVGO", "Broadcom Inc.", "Chips / Infraestructura Red"),
+    ("JPM", "JPMorgan Chase", "Banca / Credito / Liquidez"),
+]
+
+TOP_10_NASDAQ = [
+    ("AAPL", "Apple Inc.", "Nasdaq 100 Top"),
+    ("MSFT", "Microsoft Corp.", "Nasdaq 100 Top"),
+    ("NVDA", "NVIDIA Corp.", "Nasdaq 100 Top"),
+    ("AMZN", "Amazon.com Inc.", "Nasdaq 100 Top"),
+    ("GOOGL", "Alphabet Inc.", "Nasdaq 100 Top"),
+    ("META", "Meta Platforms", "Nasdaq 100 Top"),
+    ("AVGO", "Broadcom Inc.", "Nasdaq 100 Top"),
+    ("TSLA", "Tesla Inc.", "Nasdaq 100 Top"),
+    ("COST", "Costco Wholesale", "Nasdaq 100 Top"),
+    ("NFLX", "Netflix Inc.", "Nasdaq 100 Top"),
+]
+
+TOP_10_SP500 = [
+    ("AAPL", "Apple Inc.", "S&P 500 Top"),
+    ("MSFT", "Microsoft Corp.", "S&P 500 Top"),
+    ("NVDA", "NVIDIA Corp.", "S&P 500 Top"),
+    ("AMZN", "Amazon.com Inc.", "S&P 500 Top"),
+    ("GOOGL", "Alphabet Inc.", "S&P 500 Top"),
+    ("META", "Meta Platforms", "S&P 500 Top"),
+    ("BRK.B", "Berkshire Hathaway", "S&P 500 Top"),
+    ("LLY", "Eli Lilly and Co.", "S&P 500 Top"),
+    ("AVGO", "Broadcom Inc.", "S&P 500 Top"),
+    ("JPM", "JPMorgan Chase", "S&P 500 Top"),
+]
+
+RUSSELL_2000_MUESTRA = [
+    ("IWM", "iShares Russell 2000 ETF", "Indice General 2,000 Small Caps"),
+    ("SMCI", "Super Micro Computer", "Hardware / Servidores"),
+    ("IONQ", "IonQ Inc.", "Computacion Cuantica / Tech"),
+    ("SOUN", "SoundHound AI", "Voz / Software Especializado"),
+    ("RKLB", "Rocket Lab USA", "Aeroespacial / Defensa"),
+    ("MARA", "MARA Holdings", "Activos Digitales / Infraestructura"),
 ]
 
 UNIVERSOS_SECTORIALES = [
@@ -135,7 +183,7 @@ ENFOQUES_PSICOLOGICOS = [
             "Desde una perspectiva conductual, el mercado amplifica emociones colectivas: "
             "euforia en fases de expansion y urgencia defensiva en correcciones. Registrar "
             "por escrito la tesis y las condiciones de invalidacion antes de actuar ayuda "
-            "a separar el impulso emocional de la ejecucion metódica."
+            "a separar el impulso emocional de la ejecucion metodica."
         ),
         "ejercicio_practico": (
             "EJERCICIO DE DISCIPLINA CONDUCTUAL:\n"
@@ -338,7 +386,7 @@ def limpiar_texto_pdf(texto: str) -> str:
 def consultar_precio_alpha_vantage(ticker: str) -> dict | None:
     if not ALPHA_VANTAGE_KEY:
         return None
-    time.sleep(1.3)
+    time.sleep(1.2)
     try:
         resp = requests.get(
             "https://www.alphavantage.co/query",
@@ -447,7 +495,12 @@ def consultar_precio_massive(ticker: str) -> dict | None:
         return None
 
 
-def obtener_cotizacion_consolidada(ticker: str, nombre: str, preferir_externo: bool = False) -> dict:
+def obtener_cotizacion_consolidada(
+    ticker: str,
+    nombre: str,
+    categoria_extra: str = "",
+    preferir_externo: bool = True,
+) -> dict:
     orden = (
         [
             consultar_precio_finnhub,
@@ -470,6 +523,7 @@ def obtener_cotizacion_consolidada(ticker: str, nombre: str, preferir_externo: b
             return {
                 "ticker": ticker,
                 "nombre": nombre,
+                "extra": categoria_extra,
                 "cierre": dato["cierre"],
                 "var_sem": dato["var_sem"],
                 "fecha": dato["fecha"],
@@ -479,6 +533,7 @@ def obtener_cotizacion_consolidada(ticker: str, nombre: str, preferir_externo: b
     return {
         "ticker": ticker,
         "nombre": nombre,
+        "extra": categoria_extra,
         "cierre": None,
         "var_sem": None,
         "fecha": "N/D",
@@ -486,16 +541,40 @@ def obtener_cotizacion_consolidada(ticker: str, nombre: str, preferir_externo: b
     }
 
 
-def recolectar_datos_mercado(universo: dict) -> tuple[list[dict], list[dict]]:
-    macro_datos = [
-        obtener_cotizacion_consolidada(t, n, preferir_externo=False)
+def recolectar_todos_los_datos(universo: dict) -> dict:
+    macro = [
+        obtener_cotizacion_consolidada(t, n, "Benchmark", preferir_externo=False)
         for t, n in BENCHMARKS_MACRO
     ]
-    sectorial_datos = [
-        obtener_cotizacion_consolidada(t, n, preferir_externo=True)
+    top10 = [
+        obtener_cotizacion_consolidada(t, n, seg, preferir_externo=True)
+        for t, n, seg in TOP_10_EMPRESAS
+    ]
+    nasdaq10 = [
+        obtener_cotizacion_consolidada(t, n, seg, preferir_externo=True)
+        for t, n, seg in TOP_10_NASDAQ
+    ]
+    sp500_10 = [
+        obtener_cotizacion_consolidada(t, n, seg, preferir_externo=True)
+        for t, n, seg in TOP_10_SP500
+    ]
+    russell2000 = [
+        obtener_cotizacion_consolidada(t, n, seg, preferir_externo=True)
+        for t, n, seg in RUSSELL_2000_MUESTRA
+    ]
+    sectorial = [
+        obtener_cotizacion_consolidada(t, n, universo["nombre_foco"], preferir_externo=True)
         for t, n in universo["activos"]
     ]
-    return macro_datos, sectorial_datos
+
+    return {
+        "macro": macro,
+        "top10": top10,
+        "nasdaq10": nasdaq10,
+        "sp500_10": sp500_10,
+        "russell2000": russell2000,
+        "sectorial": sectorial,
+    }
 
 
 # ==============================================================================
@@ -673,42 +752,111 @@ def recolectar_noticias_consolidadas(tickers_sectoriales: list[str]) -> tuple[li
                 vistas.add(clave)
                 consolidadas.append(item)
 
-    return consolidadas[:18], conteo_por_fuente
+    return consolidadas[:20], conteo_por_fuente
 
 
-def resumir_estadisticas_mercado(macro_datos: list[dict], sectorial_datos: list[dict]) -> dict:
-    todos = macro_datos + sectorial_datos
-    validos = [d for d in todos if d["var_sem"] is not None]
+# ==============================================================================
+# 5. ANALISIS SEMANAL, PROYECCIONES PROXIMA SEMANA Y FILTRO NASDAQ VS S&P 500
+# ==============================================================================
+def resumen_grupo(filas: list[dict], etiqueta_grupo: str) -> str:
+    validos = [f for f in filas if f["var_sem"] is not None]
     if not validos:
-        return {
-            "total_auditados": len(todos),
-            "con_dato": 0,
-            "alzas": 0,
-            "bajas": 0,
-            "mejor": None,
-            "peor": None,
-            "promedio_var": None,
-        }
+        return f"{etiqueta_grupo}: Sin variaciones numericas disponibles en esta corrida."
+    prom = sum(f["var_sem"] for f in validos) / len(validos)
+    alzas = sum(1 for f in validos if f["var_sem"] > 0)
+    bajas = sum(1 for f in validos if f["var_sem"] < 0)
+    mejor = max(validos, key=lambda f: f["var_sem"])
+    peor = min(validos, key=lambda f: f["var_sem"])
+    return (
+        f"{etiqueta_grupo} ({len(validos)}/{len(filas)} con dato): promedio {prom:+.2f}%, "
+        f"{alzas} en alza / {bajas} en baja. Destacado: {mejor['ticker']} ({mejor['var_sem']:+.2f}%) | "
+        f"Rezagado: {peor['ticker']} ({peor['var_sem']:+.2f}%)."
+    )
 
-    alzas = sum(1 for d in validos if d["var_sem"] > 0)
-    bajas = sum(1 for d in validos if d["var_sem"] < 0)
-    mejor = max(validos, key=lambda d: d["var_sem"])
-    peor = min(validos, key=lambda d: d["var_sem"])
-    promedio_var = sum(d["var_sem"] for d in validos) / len(validos)
+
+def construir_analisis_semanal_y_proyecciones(datos: dict, conteo_fuentes: dict) -> dict:
+    res_macro = resumen_grupo(datos["macro"], "Benchmarks Macro")
+    res_top10 = resumen_grupo(datos["top10"], "Top 10 Empresas")
+    res_nq = resumen_grupo(datos["nasdaq10"], "Top 10 Nasdaq 100")
+    res_sp = resumen_grupo(datos["sp500_10"], "Top 10 S&P 500")
+    res_r2k = resumen_grupo(datos["russell2000"], "Russell 2000 / Small Caps")
+
+    tickers_nq = {x["ticker"] for x in datos["nasdaq10"]}
+    tickers_sp = {x["ticker"] for x in datos["sp500_10"]}
+    comunes = sorted(tickers_nq & tickers_sp)
+    solo_nq = sorted(tickers_nq - tickers_sp)
+    solo_sp = sorted(tickers_sp - tickers_nq)
+
+    prom_nq = None
+    validos_nq = [x["var_sem"] for x in datos["nasdaq10"] if x["var_sem"] is not None]
+    if validos_nq:
+        prom_nq = sum(validos_nq) / len(validos_nq)
+
+    prom_sp = None
+    validos_sp = [x["var_sem"] for x in datos["sp500_10"] if x["var_sem"] is not None]
+    if validos_sp:
+        prom_sp = sum(validos_sp) / len(validos_sp)
+
+    if prom_nq is not None and prom_sp is not None:
+        brecha = prom_nq - prom_sp
+        lectura_brecha = (
+            f"El filtro entre los 10 mayores de Nasdaq 100 (promedio {prom_nq:+.2f}%) "
+            f"y los 10 mayores del S&P 500 (promedio {prom_sp:+.2f}%) arroja una "
+            f"diferencia de {brecha:+.2f} puntos porcentuales a favor de "
+            f"{'Nasdaq 100' if brecha >= 0 else 'S&P 500'}."
+        )
+    else:
+        lectura_brecha = (
+            "El filtro compara la concentracion tecnologica/crecimiento de los 10 "
+            "mayores del Nasdaq 100 frente a la composicion mas diversificada "
+            "hacia finanzas y salud de los 10 mayores del S&P 500."
+        )
+
+    total_noticias = sum(conteo_fuentes.values())
+    analisis_semana = (
+        f"ANALISIS DE LA INFORMACION DE LA SEMANA:\n"
+        f"{res_macro}\n"
+        f"{res_top10}\n"
+        f"{res_r2k}\n"
+        f"Radar informativo: se consultaron 5 fuentes de noticias con {total_noticias} "
+        f"registros capturados en esta corrida. Cuando las megacapitalizaciones "
+        f"avanzan con mayor firmeza que el Russell 2000, el mercado privilegia "
+        f"liquidez y escala; cuando el Russell 2000 acompana o supera, mejora la "
+        f"amplitud y el apetito por riesgo domestico."
+    )
+
+    filtro_texto = (
+        f"{lectura_brecha}\n"
+        f"- Coinciden en ambos Top 10 ({len(comunes)}): {', '.join(comunes) if comunes else 'N/D'}.\n"
+        f"- Exclusivos del Top 10 Nasdaq 100 ({len(solo_nq)}): {', '.join(solo_nq) if solo_nq else 'N/D'}.\n"
+        f"- Exclusivos del Top 10 S&P 500 ({len(solo_sp)}): {', '.join(solo_sp) if solo_sp else 'N/D'}."
+    )
+
+    proyecciones_prox_semana = (
+        "PROYECCIONES PARA LA PROXIMA SEMANA (ESCENARIOS DE SEGUIMIENTO):\n"
+        "1. Escenario Base (Continuidad Selectiva): Si los benchmarks principales "
+        "mantienen su rango sin shocks en tasas o energia, es probable que sigan "
+        "predominando movimientos selectivos por resultados y flujo sectorial, con "
+        "rotacion entre grandes lideres y nombres defensivos.\n"
+        "2. Escenario Alcista de Amplitud: Si el Russell 2000 (IWM) logra sostener "
+        "avances junto a SPY y QQQ, la recuperacion gana profundidad mas alla de "
+        "las megacapitalizaciones y favorece a empresas medianas/pequenas.\n"
+        "3. Escenario de Cautela / Riesgo: Si suben las tensiones en rendimientos "
+        "de bonos o materias primas y el Russell 2000 retrocede con fuerza, conviene "
+        "priorizar liquidez, balances solidos y control estricto del tamano de posicion."
+    )
 
     return {
-        "total_auditados": len(todos),
-        "con_dato": len(validos),
-        "alzas": alzas,
-        "bajas": bajas,
-        "mejor": mejor,
-        "peor": peor,
-        "promedio_var": promedio_var,
+        "res_nq": res_nq,
+        "res_sp": res_sp,
+        "filtro_texto": filtro_texto,
+        "analisis_semana": analisis_semana,
+        "proyecciones_prox_semana": proyecciones_prox_semana,
     }
 
 
 # ==============================================================================
-# 5. MAQUETACION PDF EDITORIAL EXTENDIDA (SIN IA)
+# 6. MAQUETACION PDF EDITORIAL EXTENDIDA (SIN IA)
 # ==============================================================================
 class RevistaFimothyPDF(FPDF):
     def __init__(self, num_edicion: int, fecha_str: str):
@@ -756,7 +904,7 @@ class RevistaFimothyPDF(FPDF):
             self.ancho_util,
             8,
             limpiar_texto_pdf(
-                f"FIMOTHY Financial Enterprise | Analisis Cuantitativo, Psicologia y Estrategia | Pagina {self.page_no()}"
+                f"FIMOTHY Financial Enterprise | Mercados, Analisis Semanal, Proyecciones y Psicologia | Pagina {self.page_no()}"
             ),
             align="C",
             new_x="LMARGIN",
@@ -774,7 +922,7 @@ class RevistaFimothyPDF(FPDF):
         self.cell(
             182,
             5,
-            limpiar_texto_pdf("REVISTA SEMANAL DE MERCADOS, ESTRATEGIA Y PSICOLOGIA FINANCIERA"),
+            limpiar_texto_pdf("PUBLICACION SEMANAL DE ANALISIS DE MERCADOS Y ESTRATEGIA"),
             new_x="LMARGIN",
             new_y="NEXT",
         )
@@ -797,7 +945,7 @@ class RevistaFimothyPDF(FPDF):
             182,
             6,
             limpiar_texto_pdf(
-                f"EDICION N. {self.num_edicion:02d}   |   CIERRE SEMANAL: {self.fecha_str}   |   EDICION DE SUSCRIPCION"
+                f"EDICION N. {self.num_edicion:02d}   |   CIERRE SEMANAL: {self.fecha_str}   |   EDICION AMPLIADA"
             ),
             new_x="LMARGIN",
             new_y="NEXT",
@@ -851,7 +999,7 @@ class RevistaFimothyPDF(FPDF):
         self.cell(
             176,
             5,
-            limpiar_texto_pdf(f"Canasta sectorial: {tickers_txt}"),
+            limpiar_texto_pdf(f"Canasta sectorial: {tickers_txt}  |  Incluye Top 10, Filtro Nasdaq/S&P 500 y Russell 2000"),
             new_x="LMARGIN",
             new_y="NEXT",
         )
@@ -937,7 +1085,7 @@ class RevistaFimothyPDF(FPDF):
         fuentes_str = ", ".join(activas) if activas else "Fuentes en espera de respuesta"
 
         self.set_fill_color(18, 28, 46)
-        self.rect(14, self.get_y(), 182, 32, "F")
+        self.rect(14, self.get_y(), 182, 34, "F")
         self.set_xy(17, self.get_y() + 3)
         self.set_font("Helvetica", "B", 8.5)
         self.set_text_color(205, 170, 95)
@@ -950,15 +1098,15 @@ class RevistaFimothyPDF(FPDF):
         )
 
         self.set_x(17)
-        self.set_font("Helvetica", "", 8.3)
+        self.set_font("Helvetica", "", 8.2)
         self.set_text_color(235, 240, 246)
         self.multi_cell(
             176,
-            4.3,
+            4.2,
             limpiar_texto_pdf(
-                "01. Editorial de Estrategia & Caso Practico  |  02. Enfoque Psicologico del Inversor\n"
-                "03. Pulso Cuantitativo & Sectorial (6 activos)  |  04. Radar de Noticias & Fuentes\n"
-                f"Fuentes con noticias en esta corrida: {fuentes_str}"
+                "01. Editorial & Caso Practico  |  02. Psicologia del Inversor  |  03. Analisis Semanal & Proyecciones\n"
+                "04. Top 10 Empresas & Filtro Nasdaq vs S&P 500  |  05. Russell 2000 (2,000) & Sectorial\n"
+                f"06. Radar de Noticias en Espanol  |  Fuentes activas: {fuentes_str}"
             ),
         )
 
@@ -994,56 +1142,67 @@ class RevistaFimothyPDF(FPDF):
 
     def parrafo(self, texto: str):
         self.set_x(self.l_margin)
-        self.set_font("Helvetica", "", 9.8)
+        self.set_font("Helvetica", "", 9.7)
         self.set_text_color(32, 36, 42)
-        self.multi_cell(self.ancho_util, 5.2, limpiar_texto_pdf(texto))
+        self.multi_cell(self.ancho_util, 5.1, limpiar_texto_pdf(texto))
         self.ln(3)
 
     def caja_destacada(self, titulo: str, texto: str):
-        if self.get_y() > 235:
+        if self.get_y() > 232:
             self.add_page()
         self.set_x(self.l_margin)
         self.set_fill_color(244, 246, 250)
         self.set_draw_color(18, 28, 46)
-        self.set_font("Helvetica", "B", 9.5)
+        self.set_font("Helvetica", "B", 9.3)
         self.set_text_color(18, 28, 46)
         self.multi_cell(
             self.ancho_util,
-            5.5,
+            5.3,
             limpiar_texto_pdf(titulo),
             fill=True,
             new_x="LMARGIN",
             new_y="NEXT",
         )
         self.set_x(self.l_margin)
-        self.set_font("Helvetica", "", 9.2)
+        self.set_font("Helvetica", "", 9.0)
         self.set_text_color(40, 45, 52)
         self.multi_cell(
             self.ancho_util,
-            5,
+            4.8,
             limpiar_texto_pdf(texto),
             fill=True,
             new_x="LMARGIN",
             new_y="NEXT",
         )
-        self.ln(4)
+        self.ln(3.5)
 
-    def tabla_activos(self, filas: list[dict]):
-        if self.get_y() > 225:
+    def tabla_activos(self, filas: list[dict], titulo_col_extra: str = "Segmento / Foco"):
+        if self.get_y() > 220:
             self.add_page()
         self.set_x(self.l_margin)
-        headers = ["Ticker", "Compania / Activo", "Precio", "Var. Ref.", "Fecha", "Proveedor"]
-        widths = [20, 66, 26, 24, 24, 26]
+        headers = ["Ticker", "Compania / Activo", titulo_col_extra[:18], "Precio", "Var.", "Proveedor"]
+        widths = [18, 52, 42, 23, 21, 28]
 
         self.set_fill_color(18, 28, 46)
         self.set_text_color(255, 255, 255)
-        self.set_font("Helvetica", "B", 8.5)
+        self.set_font("Helvetica", "B", 8.2)
         for h, w in zip(headers, widths):
-            self.cell(w, 7, limpiar_texto_pdf(h), border=1, align="C", fill=True)
+            self.cell(w, 6.8, limpiar_texto_pdf(h), border=1, align="C", fill=True)
         self.ln()
 
-        self.set_font("Helvetica", "", 8.5)
+        self.set_font("Helvetica", "", 8.2)
         for idx, f in enumerate(filas):
+            if self.get_y() > 265:
+                self.add_page()
+                self.set_x(self.l_margin)
+                self.set_fill_color(18, 28, 46)
+                self.set_text_color(255, 255, 255)
+                self.set_font("Helvetica", "B", 8.2)
+                for h, w in zip(headers, widths):
+                    self.cell(w, 6.8, limpiar_texto_pdf(h), border=1, align="C", fill=True)
+                self.ln()
+                self.set_font("Helvetica", "", 8.2)
+
             self.set_x(self.l_margin)
             fill = idx % 2 == 1
             self.set_fill_color(246, 248, 251)
@@ -1056,19 +1215,20 @@ class RevistaFimothyPDF(FPDF):
             else:
                 var_txt = "N/D"
 
+            extra_txt = (f.get("extra") or f["fecha"])[:24]
             valores = [
                 f["ticker"],
-                f["nombre"][:32],
+                f["nombre"][:26],
+                extra_txt,
                 precio_txt,
                 var_txt,
-                f["fecha"],
                 f["fuente"][:14],
             ]
-            aligns = ["C", "L", "R", "R", "C", "C"]
+            aligns = ["C", "L", "L", "R", "R", "C"]
             for val, w, al in zip(valores, widths, aligns):
-                self.cell(w, 6.5, limpiar_texto_pdf(val), border=1, align=al, fill=fill)
+                self.cell(w, 6.2, limpiar_texto_pdf(val), border=1, align=al, fill=fill)
             self.ln()
-        self.ln(4)
+        self.ln(3.5)
 
 
 def construir_pdf(
@@ -1077,19 +1237,18 @@ def construir_pdf(
     editorial: dict,
     universo: dict,
     psicologia: dict,
-    macro_datos: list[dict],
-    sectorial_datos: list[dict],
+    datos: dict,
+    analisis: dict,
     noticias: list[dict],
     conteo_fuentes: dict,
-    resumen_stats: dict,
     ruta_salida: str = "revista_fimothy_semanal.pdf",
 ) -> str:
     pdf = RevistaFimothyPDF(num_edicion=num_edicion, fecha_str=fecha_str)
 
-    # Pagina 1: Portada y tablero macro
-    pdf.portada(editorial, universo, macro_datos, conteo_fuentes)
+    # 1. Portada y tablero macro
+    pdf.portada(editorial, universo, datos["macro"], conteo_fuentes)
 
-    # Pagina 2: Editorial de estrategia, caso practico y reglas
+    # 2. Editorial de estrategia, caso practico y reglas
     pdf.add_page()
     pdf.titulo_seccion("Seccion 01  |  Editorial de Estrategia", editorial["titulo"])
     pdf.parrafo(editorial["cuerpo"])
@@ -1099,61 +1258,84 @@ def construir_pdf(
         "\n".join(editorial["reglas"]),
     )
 
-    # Pagina 3: Enfoque psicologico y sesgos del inversor
+    # 3. Enfoque psicologico del inversor
     pdf.add_page()
     pdf.titulo_seccion("Seccion 02  |  Psicologia y Conducta del Inversor", psicologia["titulo_psi"])
     pdf.parrafo(psicologia["analisis_psi"])
     pdf.caja_destacada("EJERCICIO PRACTICO DE AUTOCONTROL", psicologia["ejercicio_practico"])
 
-    # Pagina 4: Pulso cuantitativo, universo sectorial y tabla
+    # 4. Analisis de la informacion de la semana y proyecciones para la proxima semana
     pdf.add_page()
     pdf.titulo_seccion(
-        "Seccion 03  |  Pulso Cuantitativo y Sectorial",
-        f"Enfoque: {universo['nombre_foco']}",
+        "Seccion 03  |  Analisis Semanal y Proyecciones",
+        "Lectura de la Semana y Escenarios para la Proxima Semana",
+    )
+    pdf.caja_destacada("ANALISIS DE LA INFORMACION DE LA SEMANA", analisis["analisis_semana"])
+    pdf.caja_destacada(
+        "PROYECCIONES A FUTURO PARA LA PROXIMA SEMANA",
+        analisis["proyecciones_prox_semana"],
     )
 
-    if resumen_stats["con_dato"] > 0:
-        mejor = resumen_stats["mejor"]
-        peor = resumen_stats["peor"]
-        resumen_txt = (
-            f"Activos auditados: {resumen_stats['total_auditados']}  |  "
-            f"Con cotizacion valida: {resumen_stats['con_dato']}  |  "
-            f"En alza: {resumen_stats['alzas']}  |  En baja: {resumen_stats['bajas']}\n"
-            f"Variacion promedio de la muestra: {resumen_stats['promedio_var']:+.2f}%\n"
-            f"Mayor avance registrado: {mejor['ticker']} ({mejor['var_sem']:+.2f}%)  |  "
-            f"Mayor retroceso registrado: {peor['ticker']} ({peor['var_sem']:+.2f}%)"
-        )
-    else:
-        resumen_txt = "No se obtuvieron cotizaciones numericas en esta corrida."
+    # 5. Top 10 empresas mas importantes + Filtro Nasdaq 100 vs S&P 500
+    pdf.add_page()
+    pdf.titulo_seccion(
+        "Seccion 04  |  Las 10 Empresas Clave y Filtro Nasdaq vs. S&P 500",
+        "Radiografia de las 10 Empresas Mas Importantes",
+    )
+    pdf.tabla_activos(datos["top10"], titulo_col_extra="Rol / Segmento")
 
-    pdf.caja_destacada("RESUMEN ESTADISTICO DE LA MUESTRA", resumen_txt)
+    pdf.titulo_seccion(
+        "Filtro Comparativo de Indices",
+        "10 Mayores de Nasdaq 100 vs. 10 Mayores del S&P 500",
+    )
+    pdf.caja_destacada("RESULTADO DEL FILTRO NASDAQ 100 VS. S&P 500", analisis["filtro_texto"])
+    pdf.tabla_activos(datos["nasdaq10"], titulo_col_extra="Referencia Nasdaq")
+    pdf.tabla_activos(datos["sp500_10"], titulo_col_extra="Referencia S&P 500")
+
+    # 6. Russell 2000 (2,000 pequenas empresas) y Universo Sectorial Rotativo
+    pdf.add_page()
+    pdf.titulo_seccion(
+        "Seccion 05  |  Russell 2000 (2,000 Empresas Pequenas) y Sectorial",
+        "Pulso del Russell 2000 y Amplitud de Mercado",
+    )
+    pdf.parrafo(
+        "El indice Russell 2000 agrupa a unas 2,000 empresas de menor capitalizacion "
+        "y permite medir el pulso real de la economia domestica y el apetito por "
+        "riesgo mas alla de las grandes corporaciones."
+    )
+    pdf.tabla_activos(datos["russell2000"], titulo_col_extra="Amplitud / Tema")
+
+    pdf.titulo_seccion(
+        "Enfoque Sectorial Rotativo de la Semana",
+        universo["nombre_foco"],
+    )
     pdf.parrafo(universo["tesis_sectorial"])
-    pdf.tabla_activos(sectorial_datos)
+    pdf.tabla_activos(datos["sectorial"], titulo_col_extra="Foco Sectorial")
     pdf.caja_destacada(
         "CLAVES DE LECTURA PARA ESTE SECTOR",
         "\n".join(f"- {c}" for c in universo["claves_lectura"]),
     )
 
-    # Pagina 5: Radar de noticias y estado de fuentes (en espanol)
+    # 7. Radar de noticias en espanol y estado de conectores
     pdf.add_page()
     pdf.titulo_seccion(
-        "Seccion 04  |  Radar de Noticias y Cobertura de Fuentes",
+        "Seccion 06  |  Radar de Noticias y Cobertura de Fuentes",
         "Titulares Recopilados de la Semana",
     )
     pdf.parrafo(
         "Nota editorial: Los titulares originales provenientes de proveedores internacionales "
-        "conservan su redaccion de origen, mientras que las etiquetas, categorias y "
-        "resumenes de la revista se presentan en espanol."
+        "conservan su redaccion de origen, mientras que las etiquetas, categorias, "
+        "analisis y proyecciones de la revista se presentan en espanol."
     )
 
     if noticias:
         for idx, n in enumerate(noticias, start=1):
             linea = f"{idx:02d}. [{n['etiqueta']}] {n['titulo']}  --  Fuente: {n['fuente']}"
             pdf.set_x(pdf.l_margin)
-            pdf.set_font("Helvetica", "", 8.9)
+            pdf.set_font("Helvetica", "", 8.8)
             pdf.set_text_color(30, 35, 42)
-            pdf.multi_cell(pdf.ancho_util, 4.7, limpiar_texto_pdf(linea))
-            pdf.ln(1.3)
+            pdf.multi_cell(pdf.ancho_util, 4.6, limpiar_texto_pdf(linea))
+            pdf.ln(1.2)
     else:
         pdf.parrafo("No se recibieron titulares nuevos en esta ventana de consulta.")
 
@@ -1162,10 +1344,7 @@ def construir_pdf(
         f"- {fuente}: {cant} titular(es) recopilado(s)"
         for fuente, cant in conteo_fuentes.items()
     )
-    pdf.caja_destacada(
-        "REPORTE DE CONECTORES DE NOTICIAS",
-        detalle_fuentes,
-    )
+    pdf.caja_destacada("REPORTE DE CONECTORES DE NOTICIAS", detalle_fuentes)
     pdf.caja_destacada(
         "AVISO EDITORIAL",
         "Publicacion generada por FIMOTHY | FINANCIAL ENTERPRISE con fines informativos "
@@ -1177,7 +1356,7 @@ def construir_pdf(
 
 
 # ==============================================================================
-# 6. ENVIO A TELEGRAM
+# 7. ENVIO A TELEGRAM
 # ==============================================================================
 def enviar_telegram(ruta_pdf: str, num_edicion: int, titulo: str, foco: str) -> None:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -1201,16 +1380,16 @@ def enviar_telegram(ruta_pdf: str, num_edicion: int, titulo: str, foco: str) -> 
 
 
 # ==============================================================================
-# 7. PUNTO DE ENTRADA PRINCIPAL (SIN LLAMADAS A IA)
+# 8. PUNTO DE ENTRADA PRINCIPAL (SIN LLAMADAS A IA)
 # ==============================================================================
 def main() -> None:
     num_edicion, editorial, universo, psicologia = obtener_configuracion_semanal()
     fecha_str = datetime.date.today().strftime("%d/%m/%Y")
 
-    macro_datos, sectorial_datos = recolectar_datos_mercado(universo)
+    datos = recolectar_todos_los_datos(universo)
     tickers_sec = [t for t, _ in universo["activos"]]
     noticias, conteo_fuentes = recolectar_noticias_consolidadas(tickers_sec)
-    resumen_stats = resumir_estadisticas_mercado(macro_datos, sectorial_datos)
+    analisis = construir_analisis_semanal_y_proyecciones(datos, conteo_fuentes)
 
     ruta_pdf = construir_pdf(
         num_edicion=num_edicion,
@@ -1218,15 +1397,14 @@ def main() -> None:
         editorial=editorial,
         universo=universo,
         psicologia=psicologia,
-        macro_datos=macro_datos,
-        sectorial_datos=sectorial_datos,
+        datos=datos,
+        analisis=analisis,
         noticias=noticias,
         conteo_fuentes=conteo_fuentes,
-        resumen_stats=resumen_stats,
     )
 
     enviar_telegram(ruta_pdf, num_edicion, editorial["titulo"], universo["nombre_foco"])
-    print(f"Revista institucional generada sin IA con exito: {ruta_pdf}")
+    print(f"Revista institucional ampliada generada con exito: {ruta_pdf}")
 
 
 if __name__ == "__main__":
