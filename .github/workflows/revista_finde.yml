@@ -20,7 +20,7 @@ jobs:
 
       - name: Instalar dependencias
         run: |
-          pip install requests fpdf2 yfinance
+          pip install requests fpdf2 yfinance matplotlib
 
       - name: Ejecutar Revista de Fin de Semana
         env:
@@ -31,8 +31,6 @@ jobs:
           MARKETAUX_API_KEY: ${{ secrets.MARKETAUX_API_KEY }}
           NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
           NEWSDATA_API_KEY: ${{ secrets.NEWSDATA_API_KEY }}
-          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python revista_finde.py
