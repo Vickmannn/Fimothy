@@ -12,20 +12,16 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # ==============================================================================
-# 1. VARIABLES DE ENTORNO (GITHUB SECRETS - FUENTES ACTIVAS + TELEGRAM)
+# 1. VARIABLES DE ENTORNO (GITHUB SECRETS - FUENTES DE MERCADO Y TELEGRAM)
 # ==============================================================================
-ALPHA_VANTAGE_KEY = (
-    os.environ.get("ALPHAVANTAGE_API_KEY")
-    or os.environ.get("ALPHA_VANTAGE_API_KEY")
-)
+ALPHAVANTAGE_API_KEY = os.environ.get("AlphaVantage_API_Key")
 FINNHUB_KEY = os.environ.get("FINNHUB_API_KEY")
 MARKETSTACK_KEY = os.environ.get("MARKETSTACK_API_KEY")
 MASSIVE_KEY = os.environ.get("MASSIVE_API_KEY") or os.environ.get("POLYGON_API_KEY")
 ALPACA_API_KEY = os.environ.get("ALPACA_API_KEY")
 ALPACA_SECRET_KEY = os.environ.get("ALPACA_SECRET_KEY")
-TWELVEDATA_KEY = os.environ.get("TWELVEDATA_API_KEY")
-FMP_KEY = os.environ.get("FMP_API_KEY")
-
+TWELVE_DATA_KEY = os.environ.get("TWELVE_DATA_API_KEY") or os.environ.get("TWELVEDATA_API_KEY")
+FMP_API_KEY = os.environ.get("FMP_API_KEY")
 MARKETAUX_KEY = os.environ.get("MARKETAUX_API_KEY")
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
 NEWSDATA_KEY = os.environ.get("NEWSDATA_API_KEY")
@@ -117,10 +113,6 @@ def _es_ticker_valido(simbolo: str) -> bool:
 
 
 def descubrir_candidatos_mercado() -> list[dict]:
-    """
-    Obtiene dinamicamente los simbolos mas activos y relevantes de la jornada
-    desde Alpha Vantage, Massive/Polygon, Finnhub, FMP y MarketStack.
-    """
     candidatos: dict[str, dict] = {}
 
     def _registrar(ticker: str, nombre: str = "", exchange: str = "", volumen: float = 0.0, precio: float = 0.0):
@@ -145,12 +137,11 @@ def descubrir_candidatos_mercado() -> list[dict]:
             if precio and candidatos[tk]["precio_ref"] <= 0:
                 candidatos[tk]["precio_ref"] = float(precio)
 
-    # 1. Alpha Vantage: TOP_GAINERS_LOSERS
-    if ALPHA_VANTAGE_KEY:
+    if ALPHAVANTAGE_API_KEY:
         try:
             resp = requests.get(
                 "https://www.alphavantage.co/query",
-                params={"function": "TOP_GAINERS_LOSERS", "apikey": ALPHA_VANTAGE_KEY},
+                params={"function": "TOP_GAINERS_LOSERS", "apikey": ALPHAVANTAGE_API_KEY},
                 timeout=20,
             )
             data = resp.json()
@@ -162,9 +153,8 @@ def descubrir_candidatos_mercado() -> list[dict]:
                         precio=float(item.get("price") or 0),
                     )
         except Exception as exc:
-            print(f"[Descubrimiento AV] Aviso: {exc}")
+            print(f"[Descubrimiento AlphaVantage] Aviso: {exc}")
 
-    # 2. Massive / Polygon: Snapshot completo del mercado estadounidense ordenado por flujo
     if MASSIVE_KEY:
         try:
             resp = requests.get(
@@ -187,7 +177,6 @@ def descubrir_candidatos_mercado() -> list[dict]:
         except Exception as exc:
             print(f"[Descubrimiento Massive] Aviso: {exc}")
 
-    # 3. Finnhub: Constituyentes de indices (^NDX, ^GSPC, ^RUT)
     if FINNHUB_KEY:
         for idx_sym, exch_hint in [("^NDX", "NASDAQ"), ("^GSPC", "NYSE"), ("^RUT", "RUSSELL")]:
             try:
@@ -202,57 +191,58 @@ def descubrir_candidatos_mercado() -> list[dict]:
             except Exception:
                 pass
 
-    # 4. FMP: Activos mas negociados del dia
-    if FMP_KEY and len(candidatos) < 25:
-        for ep, exch_hint in [
-            ("https://financialmodelingprep.com/api/v3/stock_market/actives", ""),
-            ("https://financialmodelingprep.com/api/v3/stock_market/gainers", ""),
+    if MARKETSTACK_KEY and len(candidatos) < 30:
+        for mic, exch_hint in [("XNAS", "NASDAQ"), ("XNYS", "NYSE")]:
+            try:
+                resp = requests.get(
+                    "https://api.apilayer.net/marketstack/v2/tickers",
+                    params={"access_key": MARKETSTACK_KEY, "exchange": mic, "limit": 25},
+                    timeout=20,
+                )
+                for item in resp.json().get("data", []):
+                    _registrar(
+                        ticker=item.get("symbol", ""),
+                        nombre=item.get("name", ""),
+                        exchange=exch_hint,
+                    )
+            except Exception:
+                pass
+
+    if FMP_API_KEY and len(candidatos) < 30:
+        for ruta, hint in [
+            ("https://financialmodelingprep.com/api/v3/stock_market/actives", "NASDAQ"),
+            ("https://financialmodelingprep.com/api/v3/stock_market/gainers", "NYSE"),
         ]:
             try:
-                resp = requests.get(ep, params={"apikey": FMP_KEY}, timeout=15)
+                resp = requests.get(ruta, params={"apikey": FMP_API_KEY}, timeout=15)
                 datos = resp.json()
                 if isinstance(datos, list):
                     for item in datos[:15]:
                         _registrar(
                             ticker=item.get("symbol", ""),
                             nombre=item.get("name", ""),
-                            exchange=exch_hint,
+                            exchange=hint,
                             precio=float(item.get("price") or 0),
                         )
             except Exception:
                 pass
 
-    # 5. MarketStack (APILayer v2 con respaldo v1): Activos listados en XNAS / XNYS
-    if MARKETSTACK_KEY and len(candidatos) < 30:
-        for mic, exch_hint in [("XNAS", "NASDAQ"), ("XNYS", "NYSE")]:
-            for url_tk in (
-                "https://api.apilayer.net/marketstack/v2/tickers",
-                "http://api.marketstack.com/v1/tickers",
-            ):
-                try:
-                    resp = requests.get(
-                        url_tk,
-                        params={"access_key": MARKETSTACK_KEY, "exchange": mic, "limit": 25},
-                        timeout=20,
+    if TWELVE_DATA_KEY and len(candidatos) < 20:
+        for mic, exch_hint in [("NASDAQ", "NASDAQ"), ("NYSE", "NYSE")]:
+            try:
+                resp = requests.get(
+                    "https://api.twelvedata.com/stocks",
+                    params={"exchange": mic, "apikey": TWELVE_DATA_KEY},
+                    timeout=20,
+                )
+                for item in (resp.json().get("data") or [])[:15]:
+                    _registrar(
+                        ticker=item.get("symbol", ""),
+                        nombre=item.get("name", ""),
+                        exchange=exch_hint,
                     )
-                    filas = resp.json().get("data", [])
-                    if filas:
-                        for item in filas:
-                            _registrar(
-                                ticker=item.get("symbol", ""),
-                                nombre=item.get("name", ""),
-                                exchange=exch_hint,
-                            )
-                        break
-                except Exception:
-                    pass
-
-    # 6. Respaldo en vivo si los listados masivos vienen vacios: consulta indices y tickers en fuentes activas
-    if not candidatos:
-        semilla_consulta = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD", "JPM", "XOM", "QQQ", "SPY", "IWM"]
-        for tk in semilla_consulta:
-            if serie_finnhub(tk) or serie_alpaca(tk) or serie_twelvedata(tk) or serie_marketstack(tk) or serie_fmp(tk):
-                _registrar(ticker=tk, volumen=1.0)
+            except Exception:
+                pass
 
     lista = list(candidatos.values())
     lista.sort(key=lambda x: x["volumen"], reverse=True)
@@ -278,24 +268,6 @@ def enriquecer_perfil_dinamico(ticker: str) -> dict:
                 perfil["cap_mercado"] = float(p["marketCapitalization"]) * 1e6
         except Exception:
             pass
-    if (not perfil["nombre"] or perfil["nombre"] == ticker or perfil["cap_mercado"] is None) and FMP_KEY:
-        try:
-            resp = requests.get(
-                f"https://financialmodelingprep.com/api/v3/profile/{ticker}",
-                params={"apikey": FMP_KEY},
-                timeout=12,
-            )
-            arr = resp.json()
-            if isinstance(arr, list) and arr:
-                p = arr[0]
-                if p.get("companyName") and perfil["nombre"] == ticker:
-                    perfil["nombre"] = str(p["companyName"])
-                if p.get("exchangeShortName") and not perfil["exchange"]:
-                    perfil["exchange"] = str(p["exchangeShortName"]).upper()
-                if p.get("mktCap") and perfil["cap_mercado"] is None:
-                    perfil["cap_mercado"] = float(p["mktCap"])
-        except Exception:
-            pass
     return perfil
 
 
@@ -316,93 +288,6 @@ def _calcular_evolucion(cierres_desc: list[float]) -> dict[str, float]:
             if ref > 0:
                 out[etq] = ((actual - ref) / ref) * 100.0
     return out
-
-
-def serie_alpaca(ticker: str) -> dict | None:
-    if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
-        return None
-    try:
-        desde = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=410)).strftime("%Y-%m-%dT00:00:00Z")
-        resp = requests.get(
-            f"https://data.alpaca.markets/v2/stocks/{ticker}/bars",
-            headers={
-                "APCA-API-KEY-ID": ALPACA_API_KEY,
-                "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY,
-            },
-            params={"timeframe": "1Day", "start": desde, "limit": 300, "feed": "iex", "sort": "desc"},
-            timeout=20,
-        )
-        barras = resp.json().get("bars", [])
-        if not barras:
-            return None
-        cierres = [float(b["c"]) for b in barras if b.get("c") and float(b["c"]) > 0]
-        if not cierres:
-            return None
-        evol = _calcular_evolucion(cierres)
-        fecha_bar = str(barras[0].get("t", ""))[:10] or datetime.date.today().isoformat()
-        return {
-            "precio": cierres[0],
-            "var_1d": evol.get("1D", 0.0),
-            "evolucion": evol,
-            "fecha": fecha_bar,
-            "fuente": "Alpaca",
-        }
-    except Exception:
-        return None
-
-
-def serie_twelvedata(ticker: str) -> dict | None:
-    if not TWELVEDATA_KEY:
-        return None
-    try:
-        resp = requests.get(
-            "https://api.twelvedata.com/time_series",
-            params={"symbol": ticker, "interval": "1day", "outputsize": 270, "apikey": TWELVEDATA_KEY},
-            timeout=20,
-        )
-        valores = resp.json().get("values", [])
-        if not valores:
-            return None
-        cierres = [float(v["close"]) for v in valores if v.get("close") and float(v["close"]) > 0]
-        if not cierres:
-            return None
-        evol = _calcular_evolucion(cierres)
-        return {
-            "precio": cierres[0],
-            "var_1d": evol.get("1D", 0.0),
-            "evolucion": evol,
-            "fecha": str(valores[0].get("datetime", ""))[:10],
-            "fuente": "Twelve Data",
-        }
-    except Exception:
-        return None
-
-
-def serie_fmp(ticker: str) -> dict | None:
-    if not FMP_KEY:
-        return None
-    try:
-        resp = requests.get(
-            f"https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}",
-            params={"apikey": FMP_KEY},
-            timeout=20,
-        )
-        hist = resp.json().get("historical", [])
-        if not hist:
-            return None
-        cierres = [float(h["close"]) for h in hist[:270] if h.get("close") and float(h["close"]) > 0]
-        if not cierres:
-            return None
-        evol = _calcular_evolucion(cierres)
-        return {
-            "precio": cierres[0],
-            "var_1d": evol.get("1D", 0.0),
-            "evolucion": evol,
-            "fecha": str(hist[0].get("date", ""))[:10],
-            "fuente": "FMP",
-        }
-    except Exception:
-        return None
 
 
 def serie_massive(ticker: str) -> dict | None:
@@ -438,40 +323,107 @@ def serie_massive(ticker: str) -> dict | None:
     return None
 
 
-def serie_marketstack(ticker: str) -> dict | None:
-    if not MARKETSTACK_KEY:
+def serie_alpaca(ticker: str) -> dict | None:
+    if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         return None
-    for url_eod in (
-        "https://api.apilayer.net/marketstack/v2/eod",
-        "http://api.marketstack.com/v1/eod",
-    ):
-        try:
-            resp = requests.get(
-                url_eod,
-                params={"access_key": MARKETSTACK_KEY, "symbols": ticker, "limit": 270},
-                timeout=20,
-            )
-            filas = resp.json().get("data", [])
-            if not filas:
-                continue
-            cierres = [float(x["close"]) for x in filas if x.get("close") and float(x["close"]) > 0]
-            if not cierres:
-                continue
-            evol = _calcular_evolucion(cierres)
-            return {
-                "precio": cierres[0],
-                "var_1d": evol.get("1D", 0.0),
-                "evolucion": evol,
-                "fecha": str(filas[0].get("date", ""))[:10],
-                "fuente": "MarketStack",
-            }
-        except Exception:
-            continue
+    try:
+        hasta = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        desde = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=410)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        resp = requests.get(
+            f"https://data.alpaca.markets/v2/stocks/{ticker}/bars",
+            headers={
+                "APCA-API-KEY-ID": ALPACA_API_KEY,
+                "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY,
+            },
+            params={
+                "timeframe": "1Day",
+                "start": desde,
+                "end": hasta,
+                "limit": 300,
+                "feed": "iex",
+            },
+            timeout=20,
+        )
+        bars = resp.json().get("bars", [])
+        if bars:
+            bars_desc = list(reversed(bars))
+            cierres = [float(b["c"]) for b in bars_desc if b.get("c") and float(b["c"]) > 0]
+            if cierres:
+                evol = _calcular_evolucion(cierres)
+                fecha_bar = str(bars_desc[0].get("t", ""))[:10] or datetime.date.today().isoformat()
+                return {
+                    "precio": cierres[0],
+                    "var_1d": evol.get("1D", 0.0),
+                    "evolucion": evol,
+                    "fecha": fecha_bar,
+                    "fuente": "Alpaca",
+                }
+    except Exception:
+        return None
     return None
 
 
+def serie_marketstack(ticker: str) -> dict | None:
+    if not MARKETSTACK_KEY:
+        return None
+    try:
+        resp = requests.get(
+            "https://api.apilayer.net/marketstack/v2/eod",
+            params={"access_key": MARKETSTACK_KEY, "symbols": ticker, "limit": 270},
+            timeout=20,
+        )
+        filas = resp.json().get("data", [])
+        if not filas:
+            return None
+        cierres = [float(x["close"]) for x in filas if x.get("close") and float(x["close"]) > 0]
+        if not cierres:
+            return None
+        evol = _calcular_evolucion(cierres)
+        return {
+            "precio": cierres[0],
+            "var_1d": evol.get("1D", 0.0),
+            "evolucion": evol,
+            "fecha": str(filas[0].get("date", ""))[:10],
+            "fuente": "MarketStack",
+        }
+    except Exception:
+        return None
+
+
+def serie_twelve_data(ticker: str) -> dict | None:
+    if not TWELVE_DATA_KEY:
+        return None
+    try:
+        resp = requests.get(
+            "https://api.twelvedata.com/time_series",
+            params={
+                "symbol": ticker,
+                "interval": "1day",
+                "outputsize": 270,
+                "apikey": TWELVE_DATA_KEY,
+            },
+            timeout=20,
+        )
+        valores = resp.json().get("values", [])
+        if not valores:
+            return None
+        cierres = [float(v["close"]) for v in valores if v.get("close") and float(v["close"]) > 0]
+        if not cierres:
+            return None
+        evol = _calcular_evolucion(cierres)
+        return {
+            "precio": cierres[0],
+            "var_1d": evol.get("1D", 0.0),
+            "evolucion": evol,
+            "fecha": str(valores[0].get("datetime", ""))[:10],
+            "fuente": "Twelve Data",
+        }
+    except Exception:
+        return None
+
+
 def serie_alpha_vantage(ticker: str) -> dict | None:
-    if not ALPHA_VANTAGE_KEY:
+    if not ALPHAVANTAGE_API_KEY:
         return None
     time.sleep(0.35)
     try:
@@ -481,7 +433,7 @@ def serie_alpha_vantage(ticker: str) -> dict | None:
                 "function": "TIME_SERIES_DAILY",
                 "symbol": ticker,
                 "outputsize": "full",
-                "apikey": ALPHA_VANTAGE_KEY,
+                "apikey": ALPHAVANTAGE_API_KEY,
             },
             timeout=20,
         )
@@ -498,7 +450,7 @@ def serie_alpha_vantage(ticker: str) -> dict | None:
             "var_1d": evol.get("1D", 0.0),
             "evolucion": evol,
             "fecha": fechas[0],
-            "fuente": "Alpha Vantage",
+            "fuente": "AlphaVantage",
         }
     except Exception:
         return None
@@ -602,47 +554,14 @@ def fundamentales_finnhub(ticker: str) -> dict:
         return {}
 
 
-def fundamentales_fmp(ticker: str) -> dict:
-    if not FMP_KEY:
-        return {}
-    try:
-        resp = requests.get(
-            f"https://financialmodelingprep.com/api/v3/ratios-ttm/{ticker}",
-            params={"apikey": FMP_KEY},
-            timeout=15,
-        )
-        arr = resp.json()
-        if not isinstance(arr, list) or not arr:
-            return {}
-        r = arr[0]
-
-        def _f(campo: str, mult: float = 1.0) -> float | None:
-            val = r.get(campo)
-            if val is None:
-                return None
-            try:
-                return float(val) * mult
-            except Exception:
-                return None
-
-        return {
-            "pe": _f("peRatioTTM"),
-            "margen_neto": _f("netProfitMarginTTM", 100.0),
-            "deuda_patrimonio": _f("debtEquityRatioTTM", 100.0),
-            "fuente_fund": "FMP",
-        }
-    except Exception:
-        return {}
-
-
 def fundamentales_alpha_vantage(ticker: str) -> dict:
-    if not ALPHA_VANTAGE_KEY:
+    if not ALPHAVANTAGE_API_KEY:
         return {}
     time.sleep(0.35)
     try:
         resp = requests.get(
             "https://www.alphavantage.co/query",
-            params={"function": "OVERVIEW", "symbol": ticker, "apikey": ALPHA_VANTAGE_KEY},
+            params={"function": "OVERVIEW", "symbol": ticker, "apikey": ALPHAVANTAGE_API_KEY},
             timeout=20,
         )
         ov = resp.json()
@@ -669,14 +588,49 @@ def fundamentales_alpha_vantage(ticker: str) -> dict:
             "crec_ingresos": _f("QuarterlyRevenueGrowthYOY", 100.0),
             "deuda_patrimonio": _f("DebtToEquityRatio"),
             "caja_libre": _f("OperatingCashflow"),
-            "fuente_fund": "Alpha Vantage",
+            "fuente_fund": "AlphaVantage",
+        }
+    except Exception:
+        return {}
+
+
+def fundamentales_fmp(ticker: str) -> dict:
+    if not FMP_API_KEY:
+        return {}
+    try:
+        resp = requests.get(
+            f"https://financialmodelingprep.com/api/v3/profile/{ticker}",
+            params={"apikey": FMP_API_KEY},
+            timeout=15,
+        )
+        datos = resp.json()
+        if not isinstance(datos, list) or not datos:
+            return {}
+        p = datos[0]
+
+        def _f(campo: str) -> float | None:
+            raw = p.get(campo)
+            if raw in (None, "", "None"):
+                return None
+            try:
+                return float(raw)
+            except Exception:
+                return None
+
+        return {
+            "nombre": p.get("companyName"),
+            "exchange": p.get("exchangeShortName"),
+            "cap_mercado": _f("mktCap"),
+            "pe": _f("pe"),
+            "caja_libre": _f("freeCashFlow"),
+            "fuente_fund": "FMP",
         }
     except Exception:
         return {}
 
 
 def noticias_alpha_vantage() -> list[dict]:
-    if not ALPHA_VANTAGE_KEY:
+    if not ALPHAVANTAGE_API_KEY:
         return []
     try:
         resp = requests.get(
@@ -685,7 +639,7 @@ def noticias_alpha_vantage() -> list[dict]:
                 "function": "NEWS_SENTIMENT",
                 "topics": "technology,financial_markets",
                 "limit": 6,
-                "apikey": ALPHA_VANTAGE_KEY,
+                "apikey": ALPHAVANTAGE_API_KEY,
             },
             timeout=20,
         )
@@ -693,7 +647,7 @@ def noticias_alpha_vantage() -> list[dict]:
         return [
             {
                 "titulo": i.get("title", ""),
-                "fuente": f"Alpha Vantage ({i.get('source', 'Mercado')})",
+                "fuente": f"AlphaVantage ({i.get('source', 'Mercado')})",
             }
             for i in items[:3]
             if i.get("title")
@@ -807,9 +761,9 @@ def noticias_newsdata() -> list[dict]:
         return []
 
 
-def recolectar_noticias_7_fuentes(tickers_ref: list[str]) -> tuple[list[dict], dict]:
+def recolectar_noticias_fuentes(tickers_ref: list[str]) -> tuple[list[dict], dict]:
     fuentes = {
-        "Alpha Vantage": noticias_alpha_vantage(),
+        "AlphaVantage": noticias_alpha_vantage(),
         "Finnhub": noticias_finnhub(),
         "Marketaux": noticias_marketaux(tickers_ref),
         "NewsAPI.org": noticias_newsapi(),
@@ -835,10 +789,9 @@ def evaluar_activo_real(candidato: dict) -> dict | None:
     ticker = candidato["ticker"]
     orden_series = [
         serie_alpaca,
-        serie_finnhub,
-        serie_twelvedata,
         serie_massive,
-        serie_fmp,
+        serie_finnhub,
+        serie_twelve_data,
         serie_marketstack,
         serie_alpha_vantage,
     ]
@@ -855,7 +808,7 @@ def evaluar_activo_real(candidato: dict) -> dict | None:
 
     evol = dict(serie.get("evolucion") or {})
     if len(evol) < 4:
-        for fn_extra in (serie_twelvedata, serie_fmp, serie_marketstack, serie_alpha_vantage):
+        for fn_extra in (serie_alpaca, serie_twelve_data, serie_marketstack, serie_alpha_vantage):
             if fn_extra.__name__.lower().replace("serie_", "") in serie["fuente"].lower().replace(" ", "_"):
                 continue
             extra = fn_extra(ticker)
@@ -866,11 +819,11 @@ def evaluar_activo_real(candidato: dict) -> dict | None:
 
     perfil = enriquecer_perfil_dinamico(ticker)
     fh_fund = fundamentales_finnhub(ticker)
-    fmp_fund = fundamentales_fmp(ticker)
     av_fund = fundamentales_alpha_vantage(ticker)
+    fmp_fund = fundamentales_fmp(ticker)
 
     fund = {}
-    for fuente_d in (fh_fund, fmp_fund, av_fund):
+    for fuente_d in (fh_fund, av_fund, fmp_fund):
         for k, v in fuente_d.items():
             if v is not None and fund.get(k) is None:
                 fund[k] = v
@@ -985,7 +938,7 @@ def construir_universos_dinamicos() -> list[dict]:
 
     if not evaluados:
         raise RuntimeError(
-            "Ninguna API devolvio precios reales hoy. Revisa las API Keys en GitHub Secrets y el mapeo env en tu workflow."
+            "Ninguna API devolvio precios reales hoy. Revisa las API Keys en GitHub Secrets antes de emitir el PDF."
         )
 
     nasdaq_pool = [
@@ -1055,15 +1008,7 @@ def construir_universos_dinamicos() -> list[dict]:
 
 
 def obtener_indices_cabecera() -> list[dict]:
-    orden_idx = [
-        serie_finnhub,
-        serie_alpaca,
-        serie_twelvedata,
-        serie_massive,
-        serie_fmp,
-        serie_marketstack,
-        serie_alpha_vantage,
-    ]
+    orden_idx = [serie_alpaca, serie_finnhub, serie_massive, serie_twelve_data, serie_marketstack, serie_alpha_vantage]
     salida = []
     for tk, etiqueta in INDICES_CABECERA:
         dato = None
@@ -1597,7 +1542,7 @@ def construir_pdf_reporte(
     pdf.cell(
         pdf.ancho_util,
         4.5,
-        limpiar_texto_pdf("Radar Informativo Consolidado (Alpaca, Twelve Data, FMP, Alpha Vantage, Finnhub, MarketStack, Massive, Marketaux, NewsAPI, NewsData)"),
+        limpiar_texto_pdf("Radar Informativo Consolidado (AlphaVantage, Finnhub, MarketStack, Massive, Marketaux, NewsAPI, NewsData)"),
         new_x="LMARGIN",
         new_y="NEXT",
     )
@@ -1659,7 +1604,7 @@ def main() -> None:
     todos_tickers = []
     for b in bloques:
         todos_tickers.extend([e["ticker"] for e in b["empresas"]])
-    noticias, conteo_noticias = recolectar_noticias_7_fuentes(list(dict.fromkeys(todos_tickers)))
+    noticias, conteo_noticias = recolectar_noticias_fuentes(list(dict.fromkeys(todos_tickers)))
 
     graficos_por_bloque = {}
     for bloque in bloques:
