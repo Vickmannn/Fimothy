@@ -2,8 +2,8 @@ name: Daily Financial Report to Telegram
 
 on:
   schedule:
-    # Ejecuta 1 vez al día a las 22:00 UTC (17:00 hora de Guayaquil, tras cierre de mercado)
-    - cron: "0 22 * * 1-5"
+    # 16:15 hora de Ecuador (UTC-5) = 21:15 UTC, de lunes a viernes
+    - cron: "15 21 * * 1-5"
   workflow_dispatch:
     inputs:
       tickers:
