@@ -59,6 +59,9 @@ def limpiar_texto_pdf(texto: str) -> str:
     texto = re.sub(r"\*\*(.*?)\*\*", r"\1", texto)
     texto = re.sub(r"__(.*?)__", r"\1", texto)
     texto = re.sub(r"^#+\s*", "", texto, flags=re.MULTILINE)
+    # Evita que pares de signos '$' o tildes de formato se interpreten como LaTeX/math
+    texto = re.sub(r"\$([^$\n]+?)\$", r"USD \1", texto)
+    texto = texto.replace("~", " ")
     reemplazos = {
         "—": "-",
         "–": "-",
@@ -83,9 +86,9 @@ def limpiar_texto_pdf(texto: str) -> str:
     return normalizado.encode("latin-1", "ignore").decode("latin-1")
 
 
-def _fmt_miles_millones(valor: float | None, moneda: str = "$") -> str:
+def _fmt_miles_millones(valor: float | None, moneda: str = "$", fallback_txt: str = "Activo/Etf sin cap. pub.") -> str:
     if valor is None:
-        return "N/D"
+        return fallback_txt
     abs_v = abs(float(valor))
     signo = "-" if float(valor) < 0 else ""
     if abs_v >= 1e12:
@@ -97,9 +100,9 @@ def _fmt_miles_millones(valor: float | None, moneda: str = "$") -> str:
     return f"{signo}{moneda}{abs_v:.2f}"
 
 
-def _fmt_num(valor: float | None, sufijo: str = "", signed: bool = False) -> str:
+def _fmt_num(valor: float | None, sufijo: str = "", signed: bool = False, fallback_txt: str = "En revision") -> str:
     if valor is None:
-        return "N/D"
+        return fallback_txt
     fmt = f"{float(valor):+.2f}" if signed else f"{float(valor):.2f}"
     return f"{fmt}{sufijo}"
 
@@ -268,6 +271,24 @@ def enriquecer_perfil_dinamico(ticker: str) -> dict:
                 perfil["exchange"] = str(p["exchange"]).upper()
             if p.get("marketCapitalization"):
                 perfil["cap_mercado"] = float(p["marketCapitalization"]) * 1e6
+        except Exception:
+            pass
+    if (perfil["nombre"] == ticker or perfil["cap_mercado"] is None or not perfil["exchange"]) and FMP_API_KEY:
+        try:
+            resp = requests.get(
+                f"https://financialmodelingprep.com/api/v3/profile/{ticker}",
+                params={"apikey": FMP_API_KEY},
+                timeout=12,
+            )
+            datos = resp.json()
+            if isinstance(datos, list) and datos:
+                p = datos[0]
+                if perfil["nombre"] == ticker and p.get("companyName"):
+                    perfil["nombre"] = str(p["companyName"])
+                if not perfil["exchange"] and p.get("exchangeShortName"):
+                    perfil["exchange"] = str(p["exchangeShortName"]).upper()
+                if perfil["cap_mercado"] is None and p.get("mktCap"):
+                    perfil["cap_mercado"] = float(p["mktCap"])
         except Exception:
             pass
     return perfil
@@ -520,24 +541,25 @@ def fundamentales_finnhub(ticker: str) -> dict:
         if not m:
             return {}
 
-        def _f(campo: str) -> float | None:
-            val = m.get(campo)
-            if val is None:
-                return None
-            try:
-                return float(val)
-            except Exception:
-                return None
+        def _f(*campos: str) -> float | None:
+            for campo in campos:
+                val = m.get(campo)
+                if val is not None:
+                    try:
+                        return float(val)
+                    except Exception:
+                        pass
+            return None
 
-        pe = _f("peTTM") or _f("peBasicExclExtraTTM")
-        fwd_pe = _f("forwardPE")
-        pm = _f("netProfitMarginTTM") or _f("netProfitMarginAnnual")
-        eps_g = _f("epsGrowthTTMYOY") or _f("epsGrowthQuarterlyYOY")
-        rev_g = _f("revenueGrowthTTMYOY") or _f("revenueGrowthQuarterlyYOY")
-        deuda_eq = _f("totalDebt/totalEquityQuarterly") or _f("totalDebt/totalEquityAnnual")
+        pe = _f("peTTM", "peBasicExclExtraTTM", "peAnnual", "peExclExtraTTM")
+        fwd_pe = _f("forwardPE", "peNormalizedAnnual")
+        pm = _f("netProfitMarginTTM", "netProfitMarginAnnual", "operatingMarginTTM", "operatingMarginAnnual")
+        eps_g = _f("epsGrowthTTMYOY", "epsGrowthQuarterlyYOY", "epsGrowth5Y", "epsGrowth3Y")
+        rev_g = _f("revenueGrowthTTMYOY", "revenueGrowthQuarterlyYOY", "revenueGrowth5Y", "revenueGrowth3Y")
+        deuda_eq = _f("totalDebt/totalEquityQuarterly", "totalDebt/totalEquityAnnual", "longTermDebt/equityQuarterly", "longTermDebt/equityAnnual")
         mcap_m = _f("marketCapitalization")
         mcap = mcap_m * 1e6 if mcap_m is not None else None
-        fcf_ps = _f("freeCashFlowPerShareTTM")
+        fcf_ps = _f("freeCashFlowPerShareTTM", "freeCashFlowPerShareAnnual", "operatingCashFlowPerShareTTM")
         shares_m = _f("shareOutstanding")
         fcf = (fcf_ps * shares_m * 1e6) if (fcf_ps is not None and shares_m is not None) else None
 
@@ -570,26 +592,28 @@ def fundamentales_alpha_vantage(ticker: str) -> dict:
         if not ov or "Symbol" not in ov:
             return {}
 
-        def _f(campo: str, mult: float = 1.0) -> float | None:
-            raw = ov.get(campo)
-            if raw in (None, "", "None", "-"):
-                return None
-            try:
-                return float(raw) * mult
-            except Exception:
-                return None
+        def _f(*campos: str, mult: float = 1.0) -> float | None:
+            for campo in campos:
+                raw = ov.get(campo)
+                if raw not in (None, "", "None", "-"):
+                    try:
+                        return float(raw) * mult
+                    except Exception:
+                        pass
+            return None
 
+        fcf_av = _f("OperatingCashflow", "EBITDA")
         return {
             "nombre": ov.get("Name"),
             "exchange": ov.get("Exchange"),
             "cap_mercado": _f("MarketCapitalization"),
-            "pe": _f("PERatio"),
+            "pe": _f("PERatio", "TrailingPE"),
             "pe_futuro": _f("ForwardPE"),
-            "margen_neto": _f("ProfitMargin", 100.0),
-            "crec_ganancias": _f("QuarterlyEarningsGrowthYOY", 100.0),
-            "crec_ingresos": _f("QuarterlyRevenueGrowthYOY", 100.0),
+            "margen_neto": _f("ProfitMargin", "OperatingMarginTTM", mult=100.0),
+            "crec_ganancias": _f("QuarterlyEarningsGrowthYOY", mult=100.0),
+            "crec_ingresos": _f("QuarterlyRevenueGrowthYOY", mult=100.0),
             "deuda_patrimonio": _f("DebtToEquityRatio"),
-            "caja_libre": _f("OperatingCashflow"),
+            "caja_libre": fcf_av,
             "fuente_fund": "AlphaVantage",
         }
     except Exception:
@@ -610,21 +634,22 @@ def fundamentales_fmp(ticker: str) -> dict:
             return {}
         p = datos[0]
 
-        def _f(campo: str) -> float | None:
-            raw = p.get(campo)
-            if raw in (None, "", "None"):
-                return None
-            try:
-                return float(raw)
-            except Exception:
-                return None
+        def _f(*campos: str) -> float | None:
+            for campo in campos:
+                raw = p.get(campo)
+                if raw not in (None, "", "None"):
+                    try:
+                        return float(raw)
+                    except Exception:
+                        pass
+            return None
 
         return {
             "nombre": p.get("companyName"),
             "exchange": p.get("exchangeShortName"),
             "cap_mercado": _f("mktCap"),
             "pe": _f("pe"),
-            "caja_libre": _f("freeCashFlow"),
+            "caja_libre": _f("freeCashFlow", "operatingCashFlow"),
             "fuente_fund": "FMP",
         }
     except Exception:
@@ -862,7 +887,7 @@ def evaluar_activo_real(candidato: dict) -> dict | None:
     elif crec_ing is not None:
         partes_lectura.append(f"Crecimiento ingresos YoY: {float(crec_ing):+.2f}%")
     else:
-        partes_lectura.append(f"Variacion diaria: {var_1d:+.2f}% (fuente: {serie['fuente']})")
+        partes_lectura.append(f"Impulso prom. multitemporal: {impulso_prom:+.2f}% (1D: {var_1d:+.2f}%, {serie['fuente']})")
 
     if deuda_eq is not None:
         d_val = float(deuda_eq)
@@ -872,6 +897,8 @@ def evaluar_activo_real(candidato: dict) -> dict | None:
             partes_lectura.append(f"deuda moderada ({d_val:.1f}%)")
         else:
             partes_lectura.append(f"endeudamiento contenido ({d_val:.1f}%)")
+    else:
+        partes_lectura.append("estructura sin reporte de deuda corporativa")
 
     if caja_libre is not None:
         c_val = float(caja_libre)
@@ -879,6 +906,8 @@ def evaluar_activo_real(candidato: dict) -> dict | None:
             partes_lectura.append(f"flujo de caja positivo ({_fmt_miles_millones(c_val)})")
         else:
             partes_lectura.append(f"flujo de caja negativo ({_fmt_miles_millones(c_val)})")
+    else:
+        partes_lectura.append(f"liquidez/precio en vivo ${precio:,.2f}")
 
     lectura = "; ".join(partes_lectura) + "."
 
@@ -986,7 +1015,6 @@ def construir_universos_dinamicos() -> list[dict]:
             "Ninguna API devolvio precios reales hoy. Revisa las API Keys en GitHub Secrets antes de emitir el PDF."
         )
 
-    # Pools por indice
     nasdaq_pool = [
         a for a in evaluados
         if "NASDAQ" in a["exchange"] or "XNAS" in a["exchange"]
@@ -1007,7 +1035,6 @@ def construir_universos_dinamicos() -> list[dict]:
         if a["cap_mercado"] is None or float(a["cap_mercado"]) < UMBRAL_SMALL_MID_CAP
     ]
 
-    # 1. NASDAQ: 10 por Capitalizacion + 10 Dinamicas distintas
     nasdaq_cap = _seleccionar_sin_repetir(
         pool_primario=nasdaq_pool,
         respaldo=evaluados,
@@ -1024,7 +1051,6 @@ def construir_universos_dinamicos() -> list[dict]:
         cantidad=10,
     )
 
-    # 2. S&P 500: 10 por Capitalizacion + 10 Dinamicas distintas
     sp500_cap = _seleccionar_sin_repetir(
         pool_primario=sp500_pool,
         respaldo=evaluados,
@@ -1041,7 +1067,6 @@ def construir_universos_dinamicos() -> list[dict]:
         cantidad=10,
     )
 
-    # 3. RUSSELL 2000 (Small/Mid Cap < $10B): 10 mayor tamaño del segmento + 10 Dinamicas distintas
     russell_cap = _seleccionar_sin_repetir(
         pool_primario=russell_small_mid_pool,
         respaldo=russell_respaldo_sin_gigantes,
@@ -1141,6 +1166,14 @@ def obtener_indices_cabecera() -> list[dict]:
 # ==============================================================================
 # 6. GRAFICOS POR UNIVERSO: MAPA DE CALOR + MATRIZ FUNDAMENTAL VS. IMPULSO
 # ==============================================================================
+def _tam_titulo_grafico(texto: str, base_sz: float = 8.8, min_sz: float = 6.8) -> float:
+    largo = len(texto or "")
+    if largo <= 45:
+        return base_sz
+    reduccion = (largo - 45) * 0.045
+    return max(min_sz, round(base_sz - reduccion, 2))
+
+
 def generar_graficos_universo(bloque: dict) -> dict[str, str]:
     empresas = bloque["empresas"]
     prefijo = bloque["prefijo_archivo"]
@@ -1152,7 +1185,7 @@ def generar_graficos_universo(bloque: dict) -> dict[str, str]:
     ])
     etiquetas_y = [f"{emp['rank']}. {emp['ticker']}" for emp in empresas]
 
-    fig, ax = plt.subplots(figsize=(8.2, 3.8))
+    fig, ax = plt.subplots(figsize=(8.4, 3.9))
     plt.rcParams["font.sans-serif"] = "DejaVu Sans"
     validos = matriz_calor[~np.isnan(matriz_calor)]
     vmax = max(float(np.max(np.abs(validos))), 5.0) if validos.size > 0 else 10.0
@@ -1165,9 +1198,10 @@ def generar_graficos_universo(bloque: dict) -> dict[str, str]:
     ax.set_yticks(np.arange(len(etiquetas_y)))
     ax.set_xticklabels(plazos, fontsize=7.6, fontweight="bold")
     ax.set_yticklabels(etiquetas_y, fontsize=7.8, fontweight="bold")
+    titulo_calor = f"Mapa de Calor Multitemporal ({bloque['titulo_bloque']})"
     ax.set_title(
-        f"Mapa de Calor Multitemporal ({bloque['titulo_bloque']})",
-        fontsize=9.2,
+        titulo_calor,
+        fontsize=_tam_titulo_grafico(titulo_calor, base_sz=8.8, min_sz=6.6),
         fontweight="bold",
         loc="left",
         pad=8,
@@ -1191,9 +1225,8 @@ def generar_graficos_universo(bloque: dict) -> dict[str, str]:
     cbar = fig.colorbar(im, ax=ax, fraction=0.025, pad=0.02)
     cbar.set_label("Variacion (%)", fontsize=7.2)
     cbar.ax.tick_params(labelsize=6.8)
-    plt.tight_layout()
     ruta_calor = f"mapa_calor_{prefijo}.png"
-    plt.savefig(ruta_calor, dpi=180)
+    plt.savefig(ruta_calor, dpi=180, bbox_inches="tight", pad_inches=0.12)
     plt.close(fig)
 
     crec_x = [float(emp["crec_prom"]) if emp["crec_prom"] is not None else float(emp["var_1d"]) for emp in empresas]
@@ -1201,7 +1234,7 @@ def generar_graficos_universo(bloque: dict) -> dict[str, str]:
     scores = [float(emp["score"]) for emp in empresas]
     tamanos = [max(90.0, min(420.0, abs(s) * 2.5 + 90.0)) for s in scores]
 
-    fig2, ax2 = plt.subplots(figsize=(8.2, 4.0))
+    fig2, ax2 = plt.subplots(figsize=(8.4, 4.1))
     ax2.set_facecolor("#F8FAFC")
     sc = ax2.scatter(
         crec_x,
@@ -1223,14 +1256,15 @@ def generar_graficos_universo(bloque: dict) -> dict[str, str]:
             (x_val, y_val),
             textcoords="offset points",
             xytext=(6, 4),
-            fontsize=7.5,
+            fontsize=7.2,
             fontweight="bold",
             color="#0F172A",
         )
 
+    titulo_matriz = f"FIMOTHY QUANT - Crecimiento / Traccion vs. Impulso ({bloque['titulo_bloque']})"
     ax2.set_title(
-        f"FIMOTHY QUANT - Matriz Crecimiento / Traccion vs. Impulso ({bloque['titulo_bloque']})",
-        fontsize=9.2,
+        titulo_matriz,
+        fontsize=_tam_titulo_grafico(titulo_matriz, base_sz=8.8, min_sz=6.6),
         fontweight="bold",
         loc="left",
         pad=8,
@@ -1242,16 +1276,15 @@ def generar_graficos_universo(bloque: dict) -> dict[str, str]:
     cbar2 = fig2.colorbar(sc, ax=ax2, fraction=0.025, pad=0.02)
     cbar2.set_label("Score Combinado", fontsize=7.2)
     cbar2.ax.tick_params(labelsize=6.8)
-    plt.tight_layout()
     ruta_matriz = f"matriz_cuant_{prefijo}.png"
-    plt.savefig(ruta_matriz, dpi=180)
+    plt.savefig(ruta_matriz, dpi=180, bbox_inches="tight", pad_inches=0.12)
     plt.close(fig2)
 
     return {"calor": ruta_calor, "matriz": ruta_matriz}
 
 
 # ==============================================================================
-# 7. MAQUETACION EN PDF
+# 7. MAQUETACION EN PDF (SIN ENCIMAMIENTOS NI CORTES DE TEXTO)
 # ==============================================================================
 class InstitutionalTechBriefPDF(FPDF):
     def __init__(self, fecha_utc: str):
@@ -1265,6 +1298,24 @@ class InstitutionalTechBriefPDF(FPDF):
     def ancho_util(self) -> float:
         return self.w - self.l_margin - self.r_margin
 
+    def _ajustar_cadena_a_ancho(self, texto: str, familia: str, estilo: str, tam_inicial: float, ancho_max: float, min_tam: float = 6.2) -> tuple[str, float]:
+        limpio = limpiar_texto_pdf(texto)
+        tam = tam_inicial
+        while tam >= min_tam:
+            self.set_font(familia, estilo, tam)
+            if self.get_string_width(limpio) <= ancho_max:
+                return limpio, tam
+            tam = round(tam - 0.3, 1)
+
+        self.set_font(familia, estilo, min_tam)
+        if self.get_string_width(limpio) <= ancho_max:
+            return limpio, min_tam
+
+        base = limpio
+        while len(base) > 3 and self.get_string_width(base + "...") > ancho_max:
+            base = base[:-1]
+        return (base + "...") if len(base) > 3 else limpio[:3], min_tam
+
     def header(self):
         self.set_fill_color(248, 250, 252)
         self.rect(0, 0, 210, 17, "F")
@@ -1275,29 +1326,30 @@ class InstitutionalTechBriefPDF(FPDF):
         self.set_xy(12, 4.5)
         self.set_font("Helvetica", "B", 11)
         self.set_text_color(15, 23, 42)
-        self.cell(95, 5, limpiar_texto_pdf("FIMOTHY"), new_x="RIGHT", new_y="TOP")
+        self.cell(80, 5, limpiar_texto_pdf("FIMOTHY"), new_x="RIGHT", new_y="TOP")
 
-        self.set_xy(107, 4.5)
+        self.set_xy(92, 4.5)
         self.set_font("Helvetica", "B", 8.5)
         self.set_text_color(30, 58, 138)
-        self.cell(91, 5, limpiar_texto_pdf("INSTITUTIONAL TECH REPORT"), align="R", new_x="LMARGIN", new_y="NEXT")
+        self.cell(106, 5, limpiar_texto_pdf("INSTITUTIONAL TECH REPORT"), align="R", new_x="LMARGIN", new_y="NEXT")
 
         self.set_xy(12, 9.5)
         self.set_font("Helvetica", "B", 6.8)
         self.set_text_color(100, 116, 139)
-        self.cell(95, 4, limpiar_texto_pdf("FINANCIAL ENTERPRISE"), new_x="RIGHT", new_y="TOP")
+        self.cell(65, 4, limpiar_texto_pdf("FINANCIAL ENTERPRISE"), new_x="RIGHT", new_y="TOP")
 
-        self.set_xy(107, 9.5)
-        self.set_font("Helvetica", "", 7.2)
+        self.set_xy(77, 9.5)
         self.set_text_color(71, 85, 105)
-        self.cell(
-            91,
-            4,
-            limpiar_texto_pdf(f"FIMOTHY RESEARCH | {self.universo_actual}"),
-            align="R",
-            new_x="LMARGIN",
-            new_y="NEXT",
+        sub_txt, sub_sz = self._ajustar_cadena_a_ancho(
+            f"FIMOTHY RESEARCH | {self.universo_actual}",
+            "Helvetica",
+            "",
+            7.0,
+            121.0,
+            min_tam=5.6,
         )
+        self.set_font("Helvetica", "", sub_sz)
+        self.cell(121, 4, sub_txt, align="R", new_x="LMARGIN", new_y="NEXT")
         self.set_y(22)
 
     def footer(self):
@@ -1318,7 +1370,7 @@ class InstitutionalTechBriefPDF(FPDF):
 
     def cabecera_reporte_y_indices(self, indices: list[dict]):
         self.set_x(self.l_margin)
-        self.set_font("Helvetica", "B", 16.0)
+        self.set_font("Helvetica", "B", 15.5)
         self.set_text_color(15, 23, 42)
         self.cell(
             self.ancho_util,
@@ -1329,7 +1381,7 @@ class InstitutionalTechBriefPDF(FPDF):
         )
 
         self.set_x(self.l_margin)
-        self.set_font("Helvetica", "", 8.3)
+        self.set_font("Helvetica", "", 8.2)
         self.set_text_color(71, 85, 105)
         self.cell(
             self.ancho_util,
@@ -1354,14 +1406,17 @@ class InstitutionalTechBriefPDF(FPDF):
             self.rect(x, y_top, w_card, 16.0, "DF")
 
             self.set_xy(x + 2.5, y_top + 1.6)
-            self.set_font("Helvetica", "B", 6.7)
+            etq_txt, etq_sz = self._ajustar_cadena_a_ancho(
+                idx_item["etiqueta"], "Helvetica", "B", 6.7, w_card - 5.0, min_tam=5.5
+            )
+            self.set_font("Helvetica", "B", etq_sz)
             self.set_text_color(100, 116, 139)
-            self.cell(w_card - 5, 3.4, limpiar_texto_pdf(idx_item["etiqueta"]), new_x="LMARGIN", new_y="NEXT")
+            self.cell(w_card - 5, 3.4, etq_txt, new_x="LMARGIN", new_y="NEXT")
 
             self.set_x(x + 2.5)
             self.set_font("Helvetica", "B", 10.2)
             self.set_text_color(15, 23, 42)
-            p_txt = f"{idx_item['precio']:,.2f}" if idx_item["precio"] is not None else "N/D"
+            p_txt = f"{idx_item['precio']:,.2f}" if idx_item["precio"] is not None else "En revision"
             self.cell(w_card - 5, 5.0, limpiar_texto_pdf(p_txt), new_x="LMARGIN", new_y="NEXT")
 
             self.set_x(x + 2.5)
@@ -1369,7 +1424,7 @@ class InstitutionalTechBriefPDF(FPDF):
             v1d = idx_item["var_1d"]
             if v1d is None:
                 self.set_text_color(100, 116, 139)
-                v_txt = "Variacion 1D: N/D"
+                v_txt = "Variacion 1D: Sin dato"
             elif v1d >= 0:
                 self.set_text_color(21, 128, 61)
                 v_txt = f"Variacion 1D: {v1d:+.2f}%"
@@ -1389,41 +1444,60 @@ class InstitutionalTechBriefPDF(FPDF):
         w0 = self.ancho_util
         self.set_fill_color(15, 23, 42)
         self.set_draw_color(30, 58, 138)
-        self.rect(x0, y0, w0, 11.5, "DF")
+        self.rect(x0, y0, w0, 12.2, "DF")
 
         self.set_xy(x0 + 3, y0 + 1.5)
-        self.set_font("Helvetica", "B", 9.8)
+        t_txt, t_sz = self._ajustar_cadena_a_ancho(
+            titulo_bloque, "Helvetica", "B", 9.6, w0 - 6.0, min_tam=7.2
+        )
+        self.set_font("Helvetica", "B", t_sz)
         self.set_text_color(255, 255, 255)
-        self.cell(w0 - 6, 4.2, limpiar_texto_pdf(titulo_bloque), new_x="LMARGIN", new_y="NEXT")
+        self.cell(w0 - 6, 4.4, t_txt, new_x="LMARGIN", new_y="NEXT")
 
         self.set_x(x0 + 3)
-        self.set_font("Helvetica", "", 7.3)
+        s_txt, s_sz = self._ajustar_cadena_a_ancho(
+            subtitulo_universo, "Helvetica", "", 7.2, w0 - 6.0, min_tam=5.8
+        )
+        self.set_font("Helvetica", "", s_sz)
         self.set_text_color(203, 213, 225)
-        self.cell(w0 - 6, 3.8, limpiar_texto_pdf(subtitulo_universo), new_x="LMARGIN", new_y="NEXT")
-        self.set_y(y0 + 13.8)
+        self.cell(w0 - 6, 4.0, s_txt, new_x="LMARGIN", new_y="NEXT")
+        self.set_y(y0 + 14.5)
 
     def titulo_seccion_numerada(self, num_str: str, titulo: str, bajada: str):
-        if self.get_y() > 245:
+        if self.get_y() > 242:
             self.add_page()
-        self.set_x(self.l_margin)
+        x_ini = self.l_margin
+        y_ini = self.get_y()
+        ancho_tit = self.ancho_util - 8.5
+
         self.set_fill_color(30, 58, 138)
         self.set_text_color(255, 255, 255)
         self.set_font("Helvetica", "B", 8.5)
-        self.cell(6.5, 6, limpiar_texto_pdf(num_str), align="C", fill=True, new_x="RIGHT", new_y="TOP")
+        self.rect(x_ini, y_ini, 6.5, 6.0, "F")
+        self.set_xy(x_ini, y_ini)
+        self.cell(6.5, 6.0, limpiar_texto_pdf(num_str), align="C")
 
-        self.set_xy(self.l_margin + 8, self.get_y())
-        self.set_font("Helvetica", "B", 11.5)
+        t_limpio, t_sz = self._ajustar_cadena_a_ancho(
+            titulo, "Helvetica", "B", 10.8, ancho_tit, min_tam=7.4
+        )
+        self.set_xy(x_ini + 8.5, y_ini + 0.5)
+        self.set_font("Helvetica", "B", t_sz)
         self.set_text_color(15, 23, 42)
-        self.cell(self.ancho_util - 8, 6, limpiar_texto_pdf(titulo), new_x="LMARGIN", new_y="NEXT")
+        self.cell(ancho_tit, 5.2, t_limpio, new_x="LMARGIN", new_y="NEXT")
 
-        self.set_x(self.l_margin)
-        self.set_font("Helvetica", "", 8.0)
+        self.set_y(y_ini + 6.8)
+        self.set_x(x_ini)
+        b_limpio, b_sz = self._ajustar_cadena_a_ancho(
+            bajada, "Helvetica", "", 7.8, self.ancho_util, min_tam=6.2
+        )
+        self.set_font("Helvetica", "", b_sz)
         self.set_text_color(100, 116, 139)
-        self.cell(self.ancho_util, 4.3, limpiar_texto_pdf(bajada), new_x="LMARGIN", new_y="NEXT")
+        self.cell(self.ancho_util, 4.2, b_limpio, new_x="LMARGIN", new_y="NEXT")
 
+        y_linea = self.get_y() + 0.8
         self.set_draw_color(203, 213, 225)
-        self.line(self.l_margin, self.get_y() + 1, self.l_margin + self.ancho_util, self.get_y() + 1)
-        self.ln(2.8)
+        self.line(x_ini, y_linea, x_ini + self.ancho_util, y_linea)
+        self.set_y(y_linea + 2.4)
 
     def tarjeta_empresa_ranking(self, emp: dict, es_lider: bool = False):
         if self.get_y() > 232:
@@ -1435,25 +1509,47 @@ class InstitutionalTechBriefPDF(FPDF):
         evol = emp.get("evolucion") or {}
         plazos = [etq for etq, _ in PLAZOS_EVOLUTIVOS]
 
+        # Fila superior dividida en 3 columnas limpias sin solapamiento
+        w_col_cap = 54.0
+        w_col_prc = 33.0
+        gap_col = 1.5
+        w_col_nom = w0 - (w_col_cap + w_col_prc + gap_col * 2 + 3.0)
+
         self.set_fill_color(241, 245, 249)
         self.set_draw_color(203, 213, 225)
-        self.rect(x0, y0, w0, 6.0, "DF")
+        self.rect(x0, y0, w0, 6.2, "DF")
 
-        self.set_xy(x0 + 2, y0 + 1.0)
-        self.set_font("Helvetica", "B", 8.3)
+        nom_raw = f"#{emp['rank']} {emp['nombre']} ({emp['ticker']})"
+        nom_txt, nom_sz = self._ajustar_cadena_a_ancho(
+            nom_raw, "Helvetica", "B", 8.0, w_col_nom, min_tam=6.3
+        )
+        self.set_xy(x0 + 1.5, y0 + 1.1)
+        self.set_font("Helvetica", "B", nom_sz)
         self.set_text_color(15, 23, 42)
-        self.cell(112, 4, limpiar_texto_pdf(f"#{emp['rank']} {emp['nombre']} ({emp['ticker']})"), new_x="RIGHT", new_y="TOP")
+        self.cell(w_col_nom, 4.0, nom_txt)
 
-        self.set_font("Helvetica", "B", 8.0)
+        prc_raw = f"Precio: ${emp['precio']:,.2f}"
+        prc_txt, prc_sz = self._ajustar_cadena_a_ancho(
+            prc_raw, "Helvetica", "B", 7.6, w_col_prc, min_tam=6.2
+        )
+        x_prc = x0 + 1.5 + w_col_nom + gap_col
+        self.set_xy(x_prc, y0 + 1.1)
+        self.set_font("Helvetica", "B", prc_sz)
         self.set_text_color(30, 58, 138)
-        self.cell(42, 4, limpiar_texto_pdf(f"Precio: ${emp['precio']:,.2f}"), align="R", new_x="RIGHT", new_y="TOP")
+        self.cell(w_col_prc, 4.0, prc_txt, align="R")
 
-        self.set_font("Helvetica", "B", 8.0)
+        cap_corta = _fmt_miles_millones(emp.get("cap_mercado"), fallback_txt="S/Cap")
+        cap_raw = f"Cap: {cap_corta} | Sc: {emp['score']:.1f}"
+        cap_txt, cap_sz = self._ajustar_cadena_a_ancho(
+            cap_raw, "Helvetica", "B", 7.5, w_col_cap, min_tam=6.1
+        )
+        x_cap = x_prc + w_col_prc + gap_col
+        self.set_xy(x_cap, y0 + 1.1)
+        self.set_font("Helvetica", "B", cap_sz)
         self.set_text_color(15, 23, 42)
-        cap_txt_cab = _fmt_miles_millones(emp.get("cap_mercado"))
-        self.cell(w0 - 156, 4, limpiar_texto_pdf(f"Cap: {cap_txt_cab} | Sc: {emp['score']:.1f}"), align="R", new_x="LMARGIN", new_y="NEXT")
+        self.cell(w_col_cap, 4.0, cap_txt, align="R")
 
-        y_plazos = y0 + 6.0
+        y_plazos = y0 + 6.2
         w_plazos = w0 - 50 if es_lider else w0
         w_celda = w_plazos / len(plazos)
 
@@ -1470,10 +1566,10 @@ class InstitutionalTechBriefPDF(FPDF):
             self.set_fill_color(255, 255, 255)
             self.rect(xc, y_plazos + 4.3, w_celda, 5.0, "DF")
             self.set_xy(xc, y_plazos + 5.0)
-            self.set_font("Helvetica", "B", 6.5)
+            self.set_font("Helvetica", "B", 6.4)
             if raw_val is None:
                 self.set_text_color(100, 116, 139)
-                txt_p = "N/D"
+                txt_p = "-"
             else:
                 val = float(raw_val)
                 if val >= 0:
@@ -1502,29 +1598,54 @@ class InstitutionalTechBriefPDF(FPDF):
             self.set_text_color(51, 65, 85)
             self.cell(wl - 3, 2.9, limpiar_texto_pdf(f"Fuente: {emp['fuente_precio']}"))
 
-        self.set_y(y_plazos + 10.1)
+        self.set_y(y_plazos + 10.2)
         self.set_x(x0 + 1.5)
-        self.set_font("Helvetica", "B", 7.3)
-        self.set_text_color(30, 41, 59)
-        cg_txt = _fmt_num(emp["crec_ganancias"], "%", signed=True)
-        ci_txt = _fmt_num(emp["crec_ingresos"], "%", signed=True)
-        self.cell(
-            w0 - 3,
-            3.7,
-            limpiar_texto_pdf(
-                f"Crecimiento del negocio: Ganancias {cg_txt} | Ingresos {ci_txt} | Fecha dato: {emp['fecha_dato']}"
-            ),
-            new_x="LMARGIN",
-            new_y="NEXT",
+        cg_txt = _fmt_num(emp["crec_ganancias"], "%", signed=True, fallback_txt="No reportado")
+        ci_txt = _fmt_num(emp["crec_ingresos"], "%", signed=True, fallback_txt="No reportado")
+        crec_linea = f"Crecimiento del negocio: Ganancias {cg_txt} | Ingresos {ci_txt} | Fecha dato: {emp['fecha_dato']}"
+        crec_aj, crec_sz = self._ajustar_cadena_a_ancho(
+            crec_linea, "Helvetica", "B", 7.1, w0 - 3.0, min_tam=5.9
         )
+        self.set_font("Helvetica", "B", crec_sz)
+        self.set_text_color(30, 41, 59)
+        self.cell(w0 - 3, 3.7, crec_aj, new_x="LMARGIN", new_y="NEXT")
 
         self.set_x(x0 + 1.5)
-        self.set_font("Helvetica", "", 7.2)
+        lec_linea = f"Lectura: {emp['lectura']}"
+        lec_aj, lec_sz = self._ajustar_cadena_a_ancho(
+            lec_linea, "Helvetica", "", 7.0, w0 - 3.0, min_tam=5.8
+        )
+        self.set_font("Helvetica", "", lec_sz)
         self.set_text_color(71, 85, 105)
-        self.cell(w0 - 3, 3.7, limpiar_texto_pdf(f"Lectura: {emp['lectura']}"), new_x="LMARGIN", new_y="NEXT")
-        self.ln(2.0)
+        self.cell(w0 - 3, 3.7, lec_aj, new_x="LMARGIN", new_y="NEXT")
+        self.set_y(self.get_y() + 1.8)
 
     def bloque_proyeccion_empresa(self, emp: dict):
+        if self.get_y() > 244:
+            self.add_page()
+        x0 = self.l_margin
+        y0 = self.get_y()
+        w0 = self.ancho_util
+
+        self.set_fill_color(248, 250, 252)
+        self.set_draw_color(203, 213, 225)
+        self.rect(x0, y0, w0, 14.2, "DF")
+
+        tit_aj, tit_sz = self._ajustar_cadena_a_ancho(
+            emp["fase_titulo"], "Helvetica", "B", 7.8, w0 - 5.0, min_tam=6.2
+        )
+        self.set_xy(x0 + 2.5, y0 + 1.4)
+        self.set_font("Helvetica", "B", tit_sz)
+        self.set_text_color(15, 23, 42)
+        self.cell(w0 - 5, 3.8, tit_aj, new_x="LMARGIN", new_y="NEXT")
+
+        self.set_x(x0 + 2.5)
+        self.set_font("Helvetica", "", 7.2)
+        self.set_text_color(51, 65, 85)
+        self.multi_cell(w0 - 5, 3.6, limpiar_texto_pdf(emp["fase_desc"]))
+        self.set_y(y0 + 15.8)
+
+    def bloque_fundamental_empresa(self, emp: dict):
         if self.get_y() > 246:
             self.add_page()
         x0 = self.l_margin
@@ -1533,51 +1654,35 @@ class InstitutionalTechBriefPDF(FPDF):
 
         self.set_fill_color(248, 250, 252)
         self.set_draw_color(203, 213, 225)
-        self.rect(x0, y0, w0, 14.0, "DF")
+        self.rect(x0, y0, w0, 11.6, "DF")
 
-        self.set_xy(x0 + 2.5, y0 + 1.4)
-        self.set_font("Helvetica", "B", 8.0)
-        self.set_text_color(15, 23, 42)
-        self.cell(w0 - 5, 3.8, limpiar_texto_pdf(emp["fase_titulo"]), new_x="LMARGIN", new_y="NEXT")
-
-        self.set_x(x0 + 2.5)
-        self.set_font("Helvetica", "", 7.4)
-        self.set_text_color(51, 65, 85)
-        self.multi_cell(w0 - 5, 3.7, limpiar_texto_pdf(emp["fase_desc"]))
-        self.set_y(y0 + 15.8)
-
-    def bloque_fundamental_empresa(self, emp: dict):
-        if self.get_y() > 248:
-            self.add_page()
-        x0 = self.l_margin
-        y0 = self.get_y()
-        w0 = self.ancho_util
-
-        self.set_fill_color(248, 250, 252)
-        self.set_draw_color(203, 213, 225)
-        self.rect(x0, y0, w0, 11.2, "DF")
-
+        nom_aj, nom_sz = self._ajustar_cadena_a_ancho(
+            f"{emp['nombre']} ({emp['ticker']})", "Helvetica", "B", 7.9, w0 - 5.0, min_tam=6.4
+        )
         self.set_xy(x0 + 2.5, y0 + 1.3)
-        self.set_font("Helvetica", "B", 8.1)
+        self.set_font("Helvetica", "B", nom_sz)
         self.set_text_color(15, 23, 42)
-        self.cell(w0 - 5, 3.8, limpiar_texto_pdf(f"{emp['nombre']} ({emp['ticker']})"), new_x="LMARGIN", new_y="NEXT")
+        self.cell(w0 - 5, 3.8, nom_aj, new_x="LMARGIN", new_y="NEXT")
 
-        cap_txt = _fmt_miles_millones(emp.get("cap_mercado"))
-        pe_txt = f"{float(emp['pe']):.1f}x" if emp.get("pe") is not None else "N/D"
-        fpe_txt = f"{float(emp['pe_futuro']):.1f}x" if emp.get("pe_futuro") is not None else "N/D"
-        pm_txt = _fmt_num(emp.get("margen_neto"), "%", signed=True)
-        de_txt = f"{float(emp['deuda_patrimonio']):.1f}%" if emp.get("deuda_patrimonio") is not None else "N/D"
-        fcf_txt = _fmt_miles_millones(emp.get("caja_libre"))
+        cap_txt = _fmt_miles_millones(emp.get("cap_mercado"), fallback_txt="No informada")
+        pe_txt = f"{float(emp['pe']):.1f}x" if emp.get("pe") is not None else "No aplica/s.d."
+        fpe_txt = f"{float(emp['pe_futuro']):.1f}x" if emp.get("pe_futuro") is not None else "No aplica/s.d."
+        pm_txt = _fmt_num(emp.get("margen_neto"), "%", signed=True, fallback_txt="No reportado")
+        de_txt = f"{float(emp['deuda_patrimonio']):.1f}%" if emp.get("deuda_patrimonio") is not None else "No reportado"
+        fcf_txt = _fmt_miles_millones(emp.get("caja_libre"), fallback_txt="No reportado")
 
         linea_met = (
             f"Cap. Mercado: {cap_txt} | P/E: {pe_txt} | P/E Futuro: {fpe_txt} | "
             f"Margen Neto: {pm_txt} | Deuda/Patrimonio: {de_txt} | Caja Libre: {fcf_txt}"
         )
+        met_aj, met_sz = self._ajustar_cadena_a_ancho(
+            linea_met, "Helvetica", "", 6.9, w0 - 5.0, min_tam=5.5
+        )
         self.set_x(x0 + 2.5)
-        self.set_font("Helvetica", "", 7.2)
+        self.set_font("Helvetica", "", met_sz)
         self.set_text_color(51, 65, 85)
-        self.cell(w0 - 5, 4.0, limpiar_texto_pdf(linea_met), new_x="LMARGIN", new_y="NEXT")
-        self.set_y(y0 + 13.0)
+        self.cell(w0 - 5, 4.0, met_aj, new_x="LMARGIN", new_y="NEXT")
+        self.set_y(y0 + 13.3)
 
 
 def construir_pdf_reporte(
@@ -1599,7 +1704,7 @@ def construir_pdf_reporte(
 
         pdf.titulo_seccion_numerada(
             "1",
-            f"Ranking Top 10 y Comparativas Multitemporales ({bloque['titulo_bloque']})",
+            f"Ranking Top 10 y Comparativas ({bloque['titulo_bloque']})",
             "Seleccion dinamica en tiempo real a traves de horizontes multitemporales.",
         )
         for idx, emp in enumerate(bloque["empresas"]):
@@ -1624,7 +1729,7 @@ def construir_pdf_reporte(
         pdf.add_page()
         pdf.titulo_seccion_numerada(
             "3",
-            f"Proyeccion y Escenarios Operativos ({bloque['titulo_bloque']})",
+            f"Proyeccion y Escenarios ({bloque['titulo_bloque']})",
             "Diagnostico dinamico por empresa segun comportamiento real de horizontes.",
         )
         for emp in bloque["empresas"]:
@@ -1633,7 +1738,7 @@ def construir_pdf_reporte(
         pdf.add_page()
         pdf.titulo_seccion_numerada(
             "4",
-            f"Resumen Final - Bloque Fundamental ({bloque['titulo_bloque']})",
+            f"Resumen Fundamental ({bloque['titulo_bloque']})",
             "Capitalizacion, valoracion P/E y P/E futuro, margen neto, endeudamiento y caja libre en vivo.",
         )
         for emp in bloque["empresas"]:
