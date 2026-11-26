@@ -2,8 +2,8 @@ name: Revista Semanal FIMOTHY
 
 on:
   schedule:
-    # Se ejecuta cada sábado a las 15:00 UTC (10:00 AM hora de Guayaquil)
-    - cron: '0 15 * * 6'
+    # 17:00 (5:00 p.m.) hora de Ecuador (UTC-5) = 22:00 UTC, de lunes a viernes
+    - cron: "0 22 * * 1-5"
   workflow_dispatch: # Te permite lanzarla manualmente cuando quieras probar
 
 jobs:
